@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 
-from quant.traders.metrics import Status, TraderMetrics
+from quant.traders.metrics import Status, TraderMetrics, TradeUnit
 from quant.traders.pipeline import NOT_REPLICABLE, AnalysisResult
 from quant.traders.scoring import QualityScore
+
+_UNIT = {TradeUnit.ROUND_TRIP: "RT", TradeUnit.CLOSING_ORDER: "CO"}
 
 
 def _f(x: float | None, fmt: str = ".2f", scale: float = 1.0) -> str:
@@ -47,7 +49,11 @@ def render_report(result: AnalysisResult) -> str:
     cohorts = Counter(m.cohort for m in ms)
     styles = Counter(m.style.value for m in ok if m.style)
     add("Когорты: " + ", ".join(f"{k} — {v}" for k, v in sorted(cohorts.items())) + ".  ")
-    add("Стили (по медиане удержания): " + (", ".join(f"{k} — {v}" for k, v in sorted(styles.items())) or "—") + ".  ")
+    add(
+        "Стили (по оценке времени удержания): "
+        + (", ".join(f"{k} — {v}" for k, v in sorted(styles.items())) or "—")
+        + ".  "
+    )
     add(f"Рыночный контекст рассчитан для: {', '.join(result.context_coins) or '—'}.")
     add("")
     add("## Рейтинг качества (не по ROI)")
@@ -58,22 +64,30 @@ def render_report(result: AnalysisResult) -> str:
     )
     add("")
     add(
-        "| # | Адрес | Когорта | Стиль | Скор | Сделок | Win % | PF | Ожид., bps | t | Sortino | MaxDD | "
-        "Бета BTC | Плечо p95 | Флаги |"
+        "| # | Адрес | Когорта | Стиль | Удерж., мин | Скор | Сделок | Ед. | Win % | PF | Ожид., bps | t | "
+        "Sortino | MaxDD | Бета BTC | Плечо p95 | Флаги |"
     )
-    add("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    add("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     ranked = sorted(
         (m for m in ok if score_by[m.address].rank is not None), key=lambda m: score_by[m.address].rank or 0
     )
     for m in ranked[:30]:
         s = score_by[m.address]
+        unit = _UNIT[m.trade_unit] if m.trade_unit else "—"
         add(
             f"| {s.rank} | `{_short(m.address)}` | {m.cohort} | {m.style.value if m.style else '—'} | "
-            f"{_f(s.score)} | {m.n_trades} | {_f(m.win_rate, '.0f', 100)} | {_f(m.profit_factor)} | "
+            f"{_f(m.hold_estimate_min, '.0f')} | {_f(s.score)} | {m.n_trades} | {unit} | "
+            f"{_f(m.win_rate, '.0f', 100)} | {_f(m.profit_factor)} | "
             f"{_f(m.expectancy_bps, '.1f')} | {_f(m.t_stat_bps, '.1f')} | {_f(m.acct_sortino)} | "
             f"{_f(m.acct_max_dd, '.1f', 100)}% | {_f(m.beta_btc)} | {_f(m.leverage_p95, '.1f')} | "
             f"{', '.join(m.flags) or '—'} |"
         )
+    add("")
+    add(
+        "Ед.: RT — сделка от открытия до полного закрытия позиции; CO — закрывающий ордер (для трейдеров, "
+        "которые частями наращивают и сокращают позицию и редко выходят в ноль). Удержание — по закону Литтла "
+        "(средняя позиция / поток закрытий)."
+    )
     add("")
     add(_roi_vs_quality(ok, score_by))
     add("## Гипотезы")
@@ -101,7 +115,7 @@ def render_report(result: AnalysisResult) -> str:
             f"трейдеров (доля {ev['prevalence_skilled']}; у остальных — {ev['prevalence_rest']}; "
             f"lift {ev['lift']}); эффект d = {ev['median_effect_d']}; "
             f"связь с результатом сделки ρ = {ev['median_outcome_corr']}; "
-            f"медианная сделка {ev['median_return_bps']} bps."
+            f"средняя сделка {ev['median_return_bps']} bps (медиана по трейдерам)."
         )
         add(f"- **Оговорка:** {ev['caveat']}.")
         add(f"- **Механизм:** {h.mechanism}")
@@ -119,12 +133,16 @@ def render_report(result: AnalysisResult) -> str:
         "контрольная группа; честная оценка — forward-only, на данных после `first_seen`."
     )
     add(
-        "- **Глубина истории:** API отдаёт только 10 000 последних сделок адреса; у активных трейдеров это "
-        "недели, а не годы. Метрики счёта (Sortino, DD) используют полную историю PnL."
+        "- **Глубина истории:** API отдаёт ограниченное число последних сделок адреса (у сверхактивных — "
+        "часы истории); собираем до 180 дней и до 20 000 сделок на адрес. Метрики счёта (Sortino, DD) "
+        "используют полную историю PnL."
     )
     add(
         "- **Контекст:** факторы считаются по свечам 1h (≈200 дней) и 5m (≈17 дней) и фандингу Hyperliquid; "
-        "входы вне этого окна не участвуют в тестах паттернов. Order flow и ликвидации в истории недоступны."
+        "входы вне этого окна не участвуют в тестах паттернов. Order flow и ликвидации в истории недоступны. "
+        "Фандинг учтён в метриках счёта, но по умолчанию не распределяется по отдельным сделкам. "
+        "Решения о входе одного направления по одной монете в пределах часа считаются одним решением; "
+        "результат решения — движение цены в его сторону за следующий час (только для оценки, не как фактор)."
     )
     add(
         "- **Воспроизводимость:** стиль маркет-мейкеров и HFT исключён — их преимущество в инфраструктуре "

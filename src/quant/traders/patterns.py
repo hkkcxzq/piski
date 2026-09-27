@@ -1,18 +1,23 @@
-"""Find recurring entry conditions in traders' behaviour.
+"""Find recurring entry conditions in traders' decisions.
 
-For every trader and every context feature we ask: *are the conditions at this
-trader's entries different from the conditions at random moments?*
+Unit of analysis: an **entry decision** — an order that opened or increased a position
+(see ``reconstruct``). For every trader and every context feature we ask: *are the
+conditions at this trader's entries different from the conditions at random moments?*
 
-* Baseline = random timestamps inside the trader's own active span, on the same coin,
-  paired with the **same side** as the real trade. Directional features are multiplied
-  by the side sign, so a long-biased trader in a bull market does not look like a
-  "momentum trader" just because of the drift — the baseline carries the same bias.
-* Test: Mann–Whitney U (entries vs baseline), effect size = Cohen's d.
-* Outcome link: Spearman correlation between the feature and the trade's net return —
-  does the condition matter for *profitability*, or is it just a habit?
-* Multiple testing: Benjamini–Hochberg across all (trader, feature) tests.
+* **No pseudo-replication.** Traders often scale in with many orders within minutes;
+  those share almost identical context. Entries on the same coin and side within a
+  cooldown window are collapsed into one decision before testing.
+* **Baseline** = random timestamps inside the trader's own active span, on the same
+  coin, paired with the **same side** as the real decision. Directional features are
+  multiplied by the side sign, so a long-biased trader in a bull market does not look
+  like a "momentum trader" just because of the drift — the baseline carries the same bias.
+* **Test:** Mann–Whitney U (entries vs baseline); effect size = Cohen's d.
+* **Outcome link:** Spearman correlation between the feature and the *signed forward
+  return* after the decision — does the condition matter for the result, or is it a habit?
+  The forward return is a label only; features never see data after the decision.
+* **Multiple testing:** Benjamini–Hochberg across all (trader, feature) tests.
 * A pattern counts only if several independent skilled traders show it with the same
-  sign, and it is compared against its prevalence among the remaining traders.
+  sign; its prevalence among the remaining traders is reported as a control.
 """
 
 from __future__ import annotations
@@ -21,16 +26,19 @@ import math
 import random
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from scipy import stats
 
 from quant.stats.metrics import benjamini_hochberg
-from quant.traders.context import DIRECTIONAL_FEATURES, MarketContext, features_at
-from quant.traders.models import RoundTrip
+from quant.traders.context import DIRECTIONAL_FEATURES, MarketContext, features_at, forward_return
+from quant.traders.models import EntryEvent
 
 MIN_OBS = 30
+DEFAULT_COOLDOWN_MS = 60 * 60_000
+DEFAULT_HORIZON_MS = 60 * 60_000
+DEFAULT_MAX_EVENTS = 1500
 
 
 @dataclass(slots=True)
@@ -41,7 +49,7 @@ class FeatureTest:
     n_baseline: int
     effect: float  # Cohen's d, entries - baseline
     p_value: float
-    outcome_corr: float | None  # Spearman(feature, return_bps) over the trader's trades
+    outcome_corr: float | None  # Spearman(feature, signed forward return)
     outcome_p: float | None
     significant: bool = False
 
@@ -52,10 +60,10 @@ class FeatureTest:
 
 @dataclass(slots=True)
 class TradeSample:
-    """Per-trader values used for hypothesis drafting."""
+    """Per-trader values used when drafting hypotheses."""
 
-    hold_min: list[float] = field(default_factory=list)
-    return_bps: list[float] = field(default_factory=list)
+    hold_min: float | None = None
+    return_bps: float | None = None  # mean net return per trade unit
 
 
 def _cohens_d(a: np.ndarray, b: np.ndarray) -> float:
@@ -64,29 +72,51 @@ def _cohens_d(a: np.ndarray, b: np.ndarray) -> float:
     return 0.0 if pooled == 0 else (float(a.mean()) - float(b.mean())) / pooled
 
 
+def thin_events(events: Sequence[EntryEvent], cooldown_ms: int) -> list[EntryEvent]:
+    """Collapse same-coin, same-side entries closer than ``cooldown_ms`` to the previous kept one."""
+    last_kept: dict[tuple[str, int], int] = {}
+    out: list[EntryEvent] = []
+    for e in sorted(events, key=lambda x: x.time_ms):
+        key = (e.coin, e.sign)
+        prev = last_kept.get(key)
+        if prev is not None and e.time_ms - prev < cooldown_ms:
+            continue
+        last_kept[key] = e.time_ms
+        out.append(e)
+    return out
+
+
 def evaluate_trader(
     trader: str,
-    trips: Sequence[RoundTrip],
+    events: Sequence[EntryEvent],
     ctx: MarketContext,
     rng: random.Random,
-    baseline_per_trade: int = 3,
+    *,
+    baseline_per_event: int = 3,
+    cooldown_ms: int = DEFAULT_COOLDOWN_MS,
+    horizon_ms: int = DEFAULT_HORIZON_MS,
+    max_events: int = DEFAULT_MAX_EVENTS,
 ) -> list[FeatureTest]:
-    usable = [t for t in trips if t.complete and t.coin in ctx.coins()]
+    coins = ctx.coins()
+    usable = thin_events([e for e in events if e.coin in coins], cooldown_ms)
+    if len(usable) > max_events:
+        usable = sorted(rng.sample(usable, max_events), key=lambda e: e.time_ms)
     if len(usable) < MIN_OBS:
         return []
-    lo = min(t.open_time_ms for t in usable)
-    hi = max(t.open_time_ms for t in usable)
-    actual: dict[str, list[tuple[float, float]]] = defaultdict(list)  # feature -> (value, return_bps)
+    lo = min(e.time_ms for e in usable)
+    hi = max(e.time_ms for e in usable)
+    actual: dict[str, list[tuple[float, float | None]]] = defaultdict(list)  # feature -> (value, outcome)
     baseline: dict[str, list[float]] = defaultdict(list)
-    for trip in usable:
-        sign = trip.side.sign
-        for name, value in features_at(ctx, trip.coin, trip.open_time_ms).items():
+    for ev in usable:
+        sign = ev.sign
+        fwd = forward_return(ctx, ev.coin, ev.time_ms, horizon_ms)
+        outcome = None if fwd is None else fwd * sign * 10_000
+        for name, value in features_at(ctx, ev.coin, ev.time_ms).items():
             if value is not None and math.isfinite(value):
-                v = value * sign if name in DIRECTIONAL_FEATURES else value
-                actual[name].append((v, trip.return_bps))
-        for _ in range(baseline_per_trade):
+                actual[name].append((value * sign if name in DIRECTIONAL_FEATURES else value, outcome))
+        for _ in range(baseline_per_event):
             t_rand = rng.randint(lo, hi) if hi > lo else lo
-            for name, value in features_at(ctx, trip.coin, t_rand).items():
+            for name, value in features_at(ctx, ev.coin, t_rand).items():
                 if value is not None and math.isfinite(value):
                     baseline[name].append(value * sign if name in DIRECTIONAL_FEATURES else value)
     out: list[FeatureTest] = []
@@ -96,14 +126,17 @@ def evaluate_trader(
         if len(pairs) < MIN_OBS or base.size < MIN_OBS:
             continue
         a = np.asarray([p[0] for p in pairs], dtype=np.float64)
-        r = np.asarray([p[1] for p in pairs], dtype=np.float64)
         if np.ptp(a) == 0 and np.ptp(base) == 0:
             continue
         p_value = float(stats.mannwhitneyu(a, base, alternative="two-sided").pvalue)
         corr = corr_p = None
-        if np.ptp(a) > 0 and np.ptp(r) > 0:
-            res = stats.spearmanr(a, r)
-            corr, corr_p = float(res.statistic), float(res.pvalue)
+        labelled = [(v, o) for v, o in pairs if o is not None]
+        if len(labelled) >= MIN_OBS:
+            x = np.asarray([v for v, _ in labelled], dtype=np.float64)
+            y = np.asarray([o for _, o in labelled], dtype=np.float64)
+            if np.ptp(x) > 0 and np.ptp(y) > 0:
+                res = stats.spearmanr(x, y)
+                corr, corr_p = float(res.statistic), float(res.pvalue)
         out.append(FeatureTest(trader, name, a.size, base.size, _cohens_d(a, base), p_value, corr, corr_p))
     return out
 
@@ -151,8 +184,8 @@ def aggregate(
                 continue
             rest_sup = [t for t in rest if t.significant and t.direction == direction]
             corrs = [t.outcome_corr for t in sup if t.outcome_corr is not None]
-            holds = [h for t in sup for h in samples.get(t.trader, TradeSample()).hold_min]
-            rets = [x for t in sup for x in samples.get(t.trader, TradeSample()).return_bps]
+            holds = [s.hold_min for t in sup if (s := samples.get(t.trader)) and s.hold_min is not None]
+            rets = [s.return_bps for t in sup if (s := samples.get(t.trader)) and s.return_bps is not None]
             out.append(
                 PatternEvidence(
                     feature=feature,

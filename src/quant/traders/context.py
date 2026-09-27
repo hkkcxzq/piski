@@ -150,3 +150,23 @@ def features_at(ctx: MarketContext, coin: str, t_ms: int) -> dict[str, float | N
                 if sd > 0:
                     out["funding_z"] = (float(fs.rate[k]) - float(window.mean())) / sd
     return out
+
+
+def forward_return(ctx: MarketContext, coin: str, t_ms: int, horizon_ms: int) -> float | None:
+    """Log return from the last close available at ``t`` to the last close available at ``t + horizon``.
+
+    This is an *outcome label* for evaluating a decision made at ``t``; it is never used
+    as a feature. Uses 5m candles when both ends are covered, otherwise 1h candles.
+    """
+    for series in (ctx.candles_5m.get(coin), ctx.candles_1h.get(coin)):
+        if series is None:
+            continue
+        i0 = series.last_closed_index(t_ms)
+        i1 = series.last_closed_index(t_ms + horizon_ms)
+        if i0 < 0 or i1 <= i0 or i1 >= len(series):
+            continue
+        # the end candle must close within one bar of the horizon (no stale data across gaps)
+        if int(series.open_ms[i1]) + series.interval_ms < t_ms + horizon_ms - series.interval_ms:
+            continue
+        return math.log(float(series.close[i1]) / float(series.close[i0]))
+    return None

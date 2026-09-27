@@ -1,3 +1,4 @@
+import random
 from decimal import Decimal
 
 import pytest
@@ -142,3 +143,57 @@ def test_fill_parse_validation() -> None:
         Fill.from_raw({k: v for k, v in base.items() if k != "startPosition"})
     liq = Fill.from_raw(dict(base, liquidation={"method": "market"}))
     assert liq.liquidation
+
+
+def test_same_millisecond_fills_are_chained_not_sorted_by_tid() -> None:
+    ff = FillFactory(fee_rate="0")
+    sweep = [ff.fill("BTC", 1000, str(100 + i), "1", oid=7) for i in range(6)]  # one taker order, 6 levels
+    close = [ff.fill("BTC", 2000, "110", "-2", oid=8), ff.fill("BTC", 2000, "110", "-4", oid=8)]
+    for f in sweep + close:
+        f["tid"] = random.Random(f["tid"]).randint(1, 10**15)  # venue trade ids are not chronological
+    shuffled = sweep[::-1] + close[::-1]
+    rec = reconstruct("0xa", shuffled)
+    assert rec.n_gaps == 0
+    assert len(rec.complete_trips) == 1
+    assert rec.complete_trips[0].entry_vwap == Decimal("102.5")
+
+
+def test_entries_and_realizations_are_aggregated_per_order() -> None:
+    ff = FillFactory(fee_rate="0.001")
+    fills = [
+        ff.fill("ETH", 1, "100", "1", oid=1),
+        ff.fill("ETH", 1, "101", "1", oid=1),  # same order, second level
+        ff.fill("ETH", 5, "102", "1", oid=2),  # add
+        ff.fill("ETH", 9, "110", "-2", oid=3),  # partial close
+        ff.fill("ETH", 9, "109", "-1", oid=3),
+    ]
+    rec = reconstruct("0xa", fills)
+    assert [(e.time_ms, e.sign, e.notional) for e in rec.entries] == [(1, 1, Decimal(201)), (5, 1, Decimal(102))]
+    (real,) = rec.realizations
+    assert real.position_sign == 1
+    assert real.closed_notional == Decimal(329)
+    assert real.gross_pnl == sum(Decimal(f["closedPnl"]) for f in fills)
+
+
+def test_littles_law_holding_time() -> None:
+    ff = FillFactory(fee_rate="0")
+    minute = 60_000
+    # hold 2 units for 10 min, close 1; hold 1 for 20 more min, close it -> area 40 unit·min, closed 2 -> W=20 min
+    fills = [
+        ff.fill("BTC", 0, "100", "2"),
+        ff.fill("BTC", 10 * minute, "100", "-1"),
+        ff.fill("BTC", 30 * minute, "100", "-1"),
+    ]
+    rec = reconstruct("0xa", fills)
+    hold = rec.littles_hold_ms()
+    assert hold is not None and hold / minute == pytest.approx(20.0)
+
+
+def test_real_gap_inside_same_millisecond_group_is_counted_once() -> None:
+    ff = FillFactory(fee_rate="0")
+    first = ff.fill("BTC", 1, "100", "1")
+    ff.pos["BTC"] = Decimal(5)  # position changed outside our data
+    ff.entry["BTC"] = Decimal(100)
+    group = [ff.fill("BTC", 2, "100", "-2"), ff.fill("BTC", 2, "100", "-3")]
+    rec = reconstruct("0xa", [first, *group[::-1]])
+    assert rec.n_gaps == 1

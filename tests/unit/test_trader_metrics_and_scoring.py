@@ -151,3 +151,22 @@ def test_beta_to_btc() -> None:
     assert m.beta_btc == pytest.approx(2.0, rel=1e-6)
     assert m.corr_btc == pytest.approx(1.0, rel=1e-6)
     assert m.alpha_annual == pytest.approx(0.0, abs=1e-6)
+
+
+def test_deposit_and_loss_inside_one_period_is_not_below_minus_100_percent() -> None:
+    day = 86_400_000
+    # day 0: 10k; during day 1 the trader deposits 20k and loses 15k -> ends at 15k, pnl -15k
+    raw = [
+        [
+            "perpAllTime",
+            {
+                "accountValueHistory": [[0, "10000"], [day, "15000"], [2 * day, "15000"]],
+                "pnlHistory": [[0, "0"], [day, "-15000"], [2 * day, "-15000"]],
+            },
+        ]
+    ]
+    hist = parse_portfolio(raw)
+    assert hist is not None
+    m = TraderMetrics("0xa", "t")
+    compute_account_metrics(m, hist, None)
+    assert m.acct_max_dd == pytest.approx(0.5)  # lost 15k of 30k at risk

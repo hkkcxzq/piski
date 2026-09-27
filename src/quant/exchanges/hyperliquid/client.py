@@ -168,14 +168,17 @@ class HyperliquidInfoClient:
             raise HyperliquidError(f"unexpected clearinghouseState payload for {user}")
         return data
 
-    def user_fills(self, user: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]:
-        """All reachable fills in ``[start_ms, end_ms]``, oldest first, de-duplicated."""
+    def user_fills(
+        self, user: str, start_ms: int, end_ms: int | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Reachable fills in ``[start_ms, end_ms]``, oldest first, de-duplicated (at most ~``limit``)."""
         return self._paginate(
             {"type": "userFillsByTime", "user": user, "aggregateByTime": False},
             start_ms,
             end_ms,
             time_key=lambda r: int(r["time"]),
             key=fill_key,
+            limit=limit,
         )
 
     def user_funding(self, user: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]:
@@ -228,6 +231,7 @@ class HyperliquidInfoClient:
         *,
         time_key: Callable[[Mapping[str, Any]], int],
         key: Callable[[Mapping[str, Any]], Hashable],
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Time-cursor pagination.
 
@@ -250,7 +254,7 @@ class HyperliquidInfoClient:
                 if k not in seen:
                     seen[k] = row
                     new += 1
-            if not page or new == 0:
+            if not page or new == 0 or (limit is not None and len(seen) >= limit):
                 break
             last = max(time_key(r) for r in page)
             if end_ms is not None and last >= end_ms:

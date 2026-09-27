@@ -96,6 +96,28 @@ class Fill:
 
 
 @dataclass(slots=True)
+class EntryEvent:
+    """One decision to open or increase a position: all opening fills of one order."""
+
+    coin: str
+    time_ms: int
+    sign: int  # +1 long, -1 short
+    notional: Decimal
+
+
+@dataclass(slots=True)
+class Realization:
+    """One decision to reduce or close a position: all closing fills of one order."""
+
+    coin: str
+    time_ms: int
+    position_sign: int  # sign of the position being reduced
+    closed_notional: Decimal
+    gross_pnl: Decimal
+    fees: Decimal
+
+
+@dataclass(slots=True)
 class RoundTrip:
     """One position episode on one coin: from flat (or first observation) back to flat."""
 

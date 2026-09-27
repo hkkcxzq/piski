@@ -63,8 +63,8 @@ def test_mean_reversion_trader_is_detected_and_random_trader_is_not(
 ) -> None:
     mr = reconstruct("0xmr", rule_trader_fills(candles, "BTC", "mean_reversion", seed=1, threshold=1.0))
     rnd = reconstruct("0xrnd", rule_trader_fills(candles, "BTC", "random", seed=2))
-    tests = evaluate_trader("0xmr", mr.complete_trips, ctx, random.Random(5))
-    tests += evaluate_trader("0xrnd", rnd.complete_trips, ctx, random.Random(6))
+    tests = evaluate_trader("0xmr", mr.entries, ctx, random.Random(5))
+    tests += evaluate_trader("0xrnd", rnd.entries, ctx, random.Random(6))
     apply_fdr(tests, 0.05)
     by = {(t.trader, t.feature): t for t in tests}
     z4 = by[("0xmr", "z_ret_4h")]
@@ -87,7 +87,7 @@ def test_aggregate_requires_support_and_reports_lift() -> None:
         _ft("a", "volume_ratio_4h", 0.5),
         _ft("b", "volume_ratio_4h", -0.5),
     ]
-    samples = {k: TradeSample(hold_min=[180.0], return_bps=[12.0]) for k in "abcdef"}
+    samples = {k: TradeSample(hold_min=180.0, return_bps=12.0) for k in "abcdef"}
     ev = aggregate(tests, skilled={"a", "b", "c"}, samples=samples, min_support=3)
     assert len(ev) == 1
     e = ev[0]

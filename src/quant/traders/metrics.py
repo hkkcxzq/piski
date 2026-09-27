@@ -2,8 +2,9 @@
 
 Two independent views are computed and kept separate:
 
-* **trade view** — from reconstructed round trips (only the fill window the venue lets
-  us see: at most the 10 000 most recent fills);
+* **trade view** — from reconstructed fills. The unit of a "trade" is a flat-to-flat
+  round trip when the trader has enough of them; traders who scale in and out and
+  rarely go flat are measured per closing order instead (``trade_unit`` says which);
 * **account view** — from the venue's account-value / cumulative-PnL history, which
   covers the full account life and is not distorted by deposits and withdrawals
   (returns use PnL deltas, not account-value deltas).
@@ -33,16 +34,21 @@ from quant.stats.metrics import (
     sortino,
     t_statistic,
 )
-from quant.traders.models import Side
 from quant.traders.reconstruct import ReconstructionResult
 
 MS_PER_DAY = 86_400_000
-MIN_RETURN_BASE_USD = 100.0  # ignore periods where the account was (nearly) empty
+MIN_RETURN_BASE_USD = 1_000.0  # ignore periods where the account was (nearly) empty
+MIN_RETURN_BASE_FRACTION = 0.1  # ... or tiny relative to its usual size (after withdrawals)
 
 
 class Status(StrEnum):
     OK = "ok"
     INSUFFICIENT_DATA = "insufficient_data"
+
+
+class TradeUnit(StrEnum):
+    ROUND_TRIP = "round_trip"
+    CLOSING_ORDER = "closing_order"
 
 
 class Style(StrEnum):
@@ -99,14 +105,20 @@ class TraderMetrics:
     cohort: str
     status: Status = Status.INSUFFICIENT_DATA
     style: Style | None = None
+    trade_unit: TradeUnit | None = None
     flags: list[str] = field(default_factory=list)
-    # trade view
+    # activity
     n_fills: int = 0
-    n_trades: int = 0
+    n_entries: int = 0
+    n_round_trips: int = 0
     n_excluded_trades: int = 0
+    n_gaps: int = 0
     first_trade_ms: int | None = None
     last_trade_ms: int | None = None
     active_days: float = 0.0
+    fills_per_day: float | None = None
+    # per-trade statistics (unit = trade_unit)
+    n_trades: int = 0
     trades_per_day: float | None = None
     win_rate: float | None = None
     avg_win: float | None = None
@@ -122,6 +134,7 @@ class TraderMetrics:
     fees_to_gross_pnl: float | None = None
     median_hold_min: float | None = None
     mean_hold_min: float | None = None
+    hold_littles_min: float | None = None
     long_share: float | None = None
     long_pnl: float = 0.0
     short_pnl: float = 0.0
@@ -153,37 +166,100 @@ class TraderMetrics:
     corr_btc: float | None = None
     alpha_annual: float | None = None
 
+    @property
+    def hold_estimate_min(self) -> float | None:
+        """Best available holding-time estimate: Little's law, else median round trip."""
+        return self.hold_littles_min if self.hold_littles_min is not None else self.median_hold_min
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["status"] = self.status.value
         d["style"] = self.style.value if self.style else None
+        d["trade_unit"] = self.trade_unit.value if self.trade_unit else None
         return d
 
 
-def _style(median_hold_min: float) -> Style:
-    if median_hold_min < 1:
+def _style(hold_min: float) -> Style:
+    if hold_min < 1:
         return Style.HFT
-    if median_hold_min < 30:
+    if hold_min < 30:
         return Style.SCALPER
-    if median_hold_min < 24 * 60:
+    if hold_min < 24 * 60:
         return Style.INTRADAY
     return Style.SWING
 
 
-def compute_trade_metrics(m: TraderMetrics, rec: ReconstructionResult, account: AsofSeries | None) -> None:
+def _month(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime("%Y-%m")
+
+
+def compute_trade_metrics(
+    m: TraderMetrics, rec: ReconstructionResult, account: AsofSeries | None, min_round_trips: int = 50
+) -> None:
     trips = rec.complete_trips
     m.n_fills = rec.n_fills
-    m.n_trades = len(trips)
+    m.n_entries = len(rec.entries)
+    m.n_round_trips = len(trips)
     m.n_excluded_trades = len(rec.trips) - len(trips)
+    m.n_gaps = rec.n_gaps
     m.pnl_crosscheck = rec.pnl_crosscheck()
-    if not trips:
+    m.maker_fraction = rec.maker_fraction
+    m.fees_total = float(rec.total_fees)
+    m.funding_total = float(sum(t.funding for t in rec.trips + rec.open_trips))
+    m.liquidations = sum(1 for t in rec.trips + rec.open_trips if t.liquidated)
+    if rec.first_fill_ms is None or rec.last_fill_ms is None:
         return
-    pnls = np.array([float(t.net_pnl) for t in trips])
-    bps = np.array([t.return_bps for t in trips])
-    holds = np.array([t.holding_ms or 0 for t in trips], dtype=np.float64) / 60_000.0
-    m.first_trade_ms = min(t.open_time_ms for t in trips)
-    m.last_trade_ms = max(t.close_time_ms or t.open_time_ms for t in trips)
-    m.active_days = max((m.last_trade_ms - m.first_trade_ms) / MS_PER_DAY, 1e-9)
+    m.first_trade_ms, m.last_trade_ms = rec.first_fill_ms, rec.last_fill_ms
+    m.active_days = max((rec.last_fill_ms - rec.first_fill_ms) / MS_PER_DAY, 1e-9)
+    m.fills_per_day = rec.n_fills / max(m.active_days, 1.0)
+    littles = rec.littles_hold_ms()
+    m.hold_littles_min = None if littles is None else littles / 60_000.0
+    m.coins = dict(Counter(e.coin for e in rec.entries).most_common(10))
+    for e in rec.entries:
+        m.entry_hour_hist[datetime.fromtimestamp(e.time_ms / 1000, tz=UTC).hour] += 1
+
+    if trips:
+        holds = np.array([t.holding_ms or 0 for t in trips], dtype=np.float64) / 60_000.0
+        m.median_hold_min = float(np.median(holds))
+        m.mean_hold_min = float(holds.mean())
+        m.adds_against_share = sum(1 for t in trips if t.adds_against > 0) / len(trips)
+
+    if account is not None:
+        levs = []
+        for t in rec.trips + rec.open_trips:
+            av = account.value_at(t.open_time_ms)
+            if av and av > MIN_RETURN_BASE_USD and t.entry_qty:
+                levs.append(float(t.peak_notional) / av)
+        if levs:
+            m.leverage_median = float(np.median(levs))
+            m.leverage_p95 = float(np.percentile(levs, 95))
+
+    # choose the trade unit
+    if len(trips) >= min_round_trips:
+        m.trade_unit = TradeUnit.ROUND_TRIP
+        pnls = np.array([float(t.net_pnl) for t in trips])
+        gross = np.array([float(t.gross_pnl) for t in trips])
+        bps = np.array([t.return_bps for t in trips])
+        signs = np.array([t.side.sign for t in trips])
+        times = [t.close_time_ms or t.open_time_ms for t in trips]
+    else:
+        m.trade_unit = TradeUnit.CLOSING_ORDER
+        reals = [r for r in rec.realizations if r.closed_notional > 0]
+        fee_rate = rec.avg_fee_rate  # approximate the (unobserved) opening fee of the closed part
+        pnls = np.array(
+            [float(r.gross_pnl - r.fees) - fee_rate * float(r.closed_notional) for r in reals], dtype=np.float64
+        )
+        gross = np.array([float(r.gross_pnl) for r in reals], dtype=np.float64)
+        bps = np.array(
+            [p / float(r.closed_notional) * 10_000 for p, r in zip(pnls, reals, strict=True)], dtype=np.float64
+        )
+        signs = np.array([r.position_sign for r in reals])
+        times = [r.time_ms for r in reals]
+    m.n_trades = int(pnls.size)
+    hold = m.hold_estimate_min
+    m.style = None if hold is None else _style(hold)
+    if pnls.size == 0:
+        return
     m.trades_per_day = m.n_trades / max(m.active_days, 1.0)
     wins, losses = pnls[pnls > 0], pnls[pnls < 0]
     m.win_rate = float((pnls > 0).mean())
@@ -196,48 +272,23 @@ def compute_trade_metrics(m: TraderMetrics, rec: ReconstructionResult, account: 
     m.expectancy_bps = float(bps.mean())
     m.t_stat_bps = t_statistic(bps)
     m.net_pnl_trades = float(pnls.sum())
-    m.fees_total = float(sum(t.fees for t in trips))
-    m.funding_total = float(sum(t.funding for t in trips))
-    gross_wins = float(sum(max(float(t.gross_pnl), 0.0) for t in trips))
+    gross_wins = float(gross[gross > 0].sum())
     m.fees_to_gross_pnl = m.fees_total / gross_wins if gross_wins > 0 else None
-    m.median_hold_min = float(np.median(holds))
-    m.mean_hold_min = float(holds.mean())
-    longs = [t for t in trips if t.side is Side.LONG]
-    m.long_share = len(longs) / len(trips)
-    m.long_pnl = float(sum(t.net_pnl for t in longs))
-    m.short_pnl = m.net_pnl_trades - m.long_pnl
-    total_notional = sum(float(t.total_notional) for t in trips)
-    m.maker_fraction = (sum(float(t.maker_notional) for t in trips) / total_notional) if total_notional else None
-    with_adds = [t for t in trips if t.n_adds > 0]
-    m.adds_against_share = sum(1 for t in trips if t.adds_against > 0) / len(trips) if with_adds else 0.0
+    m.long_share = float((signs > 0).mean())
+    m.long_pnl = float(pnls[signs > 0].sum())
+    m.short_pnl = float(pnls[signs < 0].sum())
     if m.net_pnl_trades > 0 and wins.size:
         m.top_trade_share = float(wins.max()) / m.net_pnl_trades
     m.largest_loss = float(losses.min()) if losses.size else None
     m.longest_losing_streak = longest_losing_streak(pnls)
-    m.liquidations = sum(1 for t in rec.trips if t.liquidated)
-    m.coins = dict(Counter(t.coin for t in trips).most_common(10))
-    for t in trips:
-        m.entry_hour_hist[datetime.fromtimestamp(t.open_time_ms / 1000, tz=UTC).hour] += 1
 
     monthly: dict[str, list[float]] = defaultdict(list)
-    for t, p in zip(trips, pnls, strict=True):
-        close = t.close_time_ms or t.open_time_ms
-        monthly[datetime.fromtimestamp(close / 1000, tz=UTC).strftime("%Y-%m")].append(float(p))
+    for t_ms, p in zip(times, pnls, strict=True):
+        monthly[_month(t_ms)].append(float(p))
     months = [sum(v) for v in monthly.values() if len(v) >= 5]
     m.n_months = len(months)
     if months:
         m.positive_month_share = sum(1 for x in months if x > 0) / len(months)
-
-    if account is not None:
-        levs = []
-        for t in trips:
-            av = account.value_at(t.open_time_ms)
-            if av and av > MIN_RETURN_BASE_USD:
-                levs.append(float(t.peak_notional) / av)
-        if levs:
-            m.leverage_median = float(np.median(levs))
-            m.leverage_p95 = float(np.percentile(levs, 95))
-    m.style = _style(m.median_hold_min)
 
 
 def compute_account_metrics(m: TraderMetrics, hist: PortfolioHistory, btc: AsofSeries | None) -> None:
@@ -249,9 +300,15 @@ def compute_account_metrics(m: TraderMetrics, hist: PortfolioHistory, btc: AsofS
     m.acct_total_pnl = float(pnl[-1] - pnl[0])
     m.acct_max_dd_usd = max_drawdown_abs(pnl - pnl[0])
 
-    base = av[:-1]
-    valid = base > MIN_RETURN_BASE_USD
-    rets = np.where(valid, np.diff(pnl) / np.where(valid, base, 1.0), 0.0)
+    # Capital at risk in a period: the larger of the starting value and "ending value minus
+    # the period's PnL" (= start + net deposits). Deposits made and lost inside one sampling
+    # interval would otherwise produce returns below -100 %.
+    dpnl = np.diff(pnl)
+    base = np.maximum(av[:-1], av[1:] - dpnl)
+    positive = av[av > 0]
+    floor = max(MIN_RETURN_BASE_USD, MIN_RETURN_BASE_FRACTION * float(np.median(positive)) if positive.size else 0.0)
+    valid = base >= floor
+    rets = np.where(valid, dpnl / np.where(valid, base, 1.0), 0.0)
     rets = np.clip(rets, -0.9999, None)
     ret_times = times[1:][valid]
     rets = rets[valid]
@@ -295,9 +352,11 @@ def compute_account_metrics(m: TraderMetrics, hist: PortfolioHistory, btc: AsofS
 def finalize(m: TraderMetrics, min_trades: int, min_history_days: float) -> None:
     """Assign status and behavioural flags. Flags describe; scoring decides."""
     flags: list[str] = []
-    if m.maker_fraction is not None and m.maker_fraction >= 0.8 and (m.trades_per_day or 0) >= 50:
+    busy = (m.fills_per_day or 0) >= 200
+    if m.maker_fraction is not None and m.maker_fraction >= 0.8 and busy:
         flags.append("market_maker_like")
-    if m.median_hold_min is not None and m.median_hold_min < 1 and (m.trades_per_day or 0) >= 200:
+    hold = m.hold_estimate_min
+    if hold is not None and hold < 1 and busy:
         flags.append("hft_like")
     if (m.adds_against_share or 0) > 0.25:
         flags.append("martingale_like")

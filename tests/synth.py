@@ -74,7 +74,13 @@ class FillFactory:
         self.entry: dict[str, Decimal] = {}
 
     def fill(
-        self, coin: str, t: int, px: str | Decimal, signed_sz: str | Decimal, crossed: bool = True
+        self,
+        coin: str,
+        t: int,
+        px: str | Decimal,
+        signed_sz: str | Decimal,
+        crossed: bool = True,
+        oid: int | None = None,
     ) -> dict[str, Any]:
         px_d, sz_d = Decimal(str(px)), Decimal(str(signed_sz))
         start = self.pos.get(coin, Decimal(0))
@@ -106,7 +112,7 @@ class FillFactory:
             "crossed": crossed,
             "dir": direction,
             "tid": self.tid,
-            "oid": self.tid,
+            "oid": self.tid if oid is None else oid,
             "hash": f"0x{self.tid:x}",
         }
 

@@ -91,6 +91,13 @@ class TraderResearchConfig(_Frozen):
     min_trades: int = Field(50, ge=1)
     min_history_days: float = Field(30.0, ge=0)
     refresh_after_hours: float = Field(24.0, ge=0)
+    fills_lookback_days: float = Field(180.0, gt=0)
+    max_fills_per_trader: int = Field(20_000, ge=2_000)
+    entry_cooldown_minutes: float = Field(60.0, ge=0)
+    outcome_horizon_minutes: float = Field(60.0, gt=0)
+    # per-address funding history is expensive (hourly rows per coin); 0 disables it.
+    # Account-level metrics include funding anyway via the venue's PnL history.
+    user_funding_days: float = Field(0.0, ge=0)
     context_coins: tuple[str, ...] = ("BTC", "ETH", "SOL")
     fdr_q: float = Field(0.05, gt=0, lt=1)
     min_supporting_traders: int = Field(3, ge=1)

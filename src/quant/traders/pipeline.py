@@ -49,7 +49,9 @@ BTC_DAILY_START_MS = 1_672_531_200_000  # 2023-01-01
 class InfoSource(Protocol):
     def leaderboard(self) -> list[dict[str, Any]]: ...
     def portfolio(self, user: str) -> list[Any]: ...
-    def user_fills(self, user: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]: ...
+    def user_fills(
+        self, user: str, start_ms: int, end_ms: int | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]: ...
     def user_funding(self, user: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]: ...
     def funding_history(self, coin: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]: ...
     def candles(self, coin: str, interval: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]: ...
@@ -67,6 +69,32 @@ class CollectSummary:
 
 def _time(r: dict[str, Any]) -> int:
     return int(r["time"])
+
+
+MS_PER_DAY = 86_400_000
+FILL_WINDOWS_DAYS = (7, 30, 90, 180, 365, 730, 1460)
+
+
+def fetch_recent_fills(
+    client: InfoSource, user: str, since_ms: int, now_ms: int, max_fills: int
+) -> list[dict[str, Any]]:
+    """Newest-first window walk: the most recent fills since ``since_ms``, up to ~``max_fills``.
+
+    The API pages forward in time, so we request growing windows backwards from now
+    and stop once enough fills are collected; hyperactive accounts then cost a bounded
+    number of requests while normal accounts are fetched completely.
+    """
+    out: list[dict[str, Any]] = []
+    end = now_ms
+    for days in FILL_WINDOWS_DAYS:
+        start = max(since_ms, now_ms - days * MS_PER_DAY)
+        if start > end:
+            break
+        out.extend(client.user_fills(user, start_ms=start, end_ms=end, limit=max_fills - len(out)))
+        if len(out) >= max_fills or start <= since_ms:
+            break
+        end = start - 1
+    return out
 
 
 def collect(
@@ -112,14 +140,17 @@ def collect(
         try:
             fills_path = store.fills_path(addr)
             known = store.load_list(fills_path)
-            start = _time(known[-1]) if known else 0
-            fills = client.user_fills(addr, start_ms=start)
+            since = int(now_ms - cfg.fills_lookback_days * MS_PER_DAY)
+            if known:
+                since = max(since, _time(known[-1]))
+            fills = fetch_recent_fills(client, addr, since, now_ms, cfg.max_fills_per_trader)
             summary.new_fills += store.merge_records(fills_path, fills, fill_key, _time)
-            all_fills = store.load_list(fills_path)
-            if all_fills:
+            if cfg.user_funding_days > 0:
                 fpath = store.funding_user_path(addr)
                 known_f = store.load_list(fpath)
-                f_start = _time(known_f[-1]) if known_f else _time(all_fills[0])
+                f_start = int(now_ms - cfg.user_funding_days * MS_PER_DAY)
+                if known_f:
+                    f_start = max(f_start, _time(known_f[-1]))
                 store.merge_records(fpath, client.user_funding(addr, start_ms=f_start), funding_key, _time)
             write_json(store.portfolio_path(addr), client.portfolio(addr))
         except HyperliquidError as exc:
@@ -190,7 +221,7 @@ def analyze(settings: Settings, store: TraderStore, now_ms: int) -> AnalysisResu
     registry = store.load_registry()
     ctx, btc = load_market_context(settings, store)
     metrics: list[TraderMetrics] = []
-    trips_by: dict[str, list[Any]] = {}
+    entries_by: dict[str, list[Any]] = {}
     samples: dict[str, TradeSample] = {}
     for addr in sorted(registry):
         entry = registry[addr]
@@ -201,17 +232,13 @@ def analyze(settings: Settings, store: TraderStore, now_ms: int) -> AnalysisResu
         if store.portfolio_path(addr).exists():
             hist = parse_portfolio(store.load_list(store.portfolio_path(addr)))
         account = AsofSeries(hist.times, hist.account_value) if hist else None
-        compute_trade_metrics(m, rec, account)
+        compute_trade_metrics(m, rec, account, min_round_trips=cfg.min_trades)
         if hist is not None:
             compute_account_metrics(m, hist, btc)
         finalize(m, cfg.min_trades, cfg.min_history_days)
         metrics.append(m)
-        complete = rec.complete_trips
-        trips_by[addr] = complete
-        samples[addr] = TradeSample(
-            hold_min=[(t.holding_ms or 0) / 60_000 for t in complete],
-            return_bps=[t.return_bps for t in complete],
-        )
+        entries_by[addr] = rec.entries
+        samples[addr] = TradeSample(hold_min=m.hold_estimate_min, return_bps=m.expectancy_bps)
 
     scores = score_population(metrics)
     score_by = {s.address: s for s in scores}
@@ -226,7 +253,16 @@ def analyze(settings: Settings, store: TraderStore, now_ms: int) -> AnalysisResu
     rng = random.Random(cfg.random_seed)
     tests: list[FeatureTest] = []
     for m in replicable:
-        tests.extend(evaluate_trader(m.address, trips_by[m.address], ctx, rng))
+        tests.extend(
+            evaluate_trader(
+                m.address,
+                entries_by[m.address],
+                ctx,
+                rng,
+                cooldown_ms=int(cfg.entry_cooldown_minutes * 60_000),
+                horizon_ms=int(cfg.outcome_horizon_minutes * 60_000),
+            )
+        )
     apply_fdr(tests, cfg.fdr_q)
     evidence = aggregate(tests, skilled, samples, cfg.min_supporting_traders)
     hypotheses = build_hypotheses(evidence)

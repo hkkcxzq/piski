@@ -49,9 +49,11 @@ class FakeHyperliquid:
         self._count("portfolio")
         return portfolio_from_fills(self.fills[user])
 
-    def user_fills(self, user: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]:
+    def user_fills(
+        self, user: str, start_ms: int, end_ms: int | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
         self._count("user_fills")
-        return [f for f in self.fills[user] if f["time"] >= start_ms]
+        return [f for f in self.fills[user] if f["time"] >= start_ms and (end_ms is None or f["time"] <= end_ms)]
 
     def user_funding(self, user: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]:
         return []
