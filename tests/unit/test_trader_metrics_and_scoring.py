@@ -7,13 +7,14 @@ from quant.traders.metrics import (
     Status,
     Style,
     TraderMetrics,
+    TradeUnit,
     compute_account_metrics,
     compute_trade_metrics,
     finalize,
     parse_portfolio,
 )
 from quant.traders.reconstruct import reconstruct
-from quant.traders.scoring import score_population
+from quant.traders.scoring import _significance, score_population
 from synth import HOUR, T0, FillFactory, portfolio_from_fills
 
 
@@ -170,3 +171,12 @@ def test_deposit_and_loss_inside_one_period_is_not_below_minus_100_percent() -> 
     m = TraderMetrics("0xa", "t")
     compute_account_metrics(m, hist, None)
     assert m.acct_max_dd == pytest.approx(0.5)  # lost 15k of 30k at risk
+
+
+def test_significance_ignores_realized_only_statistics() -> None:
+    bag_holder = TraderMetrics("0xb", "t", trade_unit=TradeUnit.CLOSING_ORDER, t_stat_bps=15.0)
+    assert _significance(bag_holder) is None  # realized-only t-stat is not trusted
+    bag_holder.acct_t_stat = -0.5
+    assert _significance(bag_holder) == -0.5
+    round_tripper = TraderMetrics("0xr", "t", trade_unit=TradeUnit.ROUND_TRIP, t_stat_bps=2.0)
+    assert _significance(round_tripper) == 2.0

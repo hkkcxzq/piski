@@ -162,6 +162,9 @@ class TraderMetrics:
     acct_max_dd: float | None = None
     acct_max_dd_usd: float | None = None
     acct_calmar: float | None = None
+    acct_t_stat: float | None = None  # t-statistic of period returns (includes unrealized PnL)
+    acct_positive_month_share: float | None = None
+    acct_n_months: int = 0
     beta_btc: float | None = None
     corr_btc: float | None = None
     alpha_annual: float | None = None
@@ -325,6 +328,13 @@ def compute_account_metrics(m: TraderMetrics, hist: PortfolioHistory, btc: AsofS
     m.acct_sharpe = sharpe(rets, ppy)
     m.acct_sortino = sortino(rets, ppy)
     m.acct_max_dd = max_drawdown_from_returns(rets)
+    m.acct_t_stat = t_statistic(rets)
+    monthly: dict[str, float] = defaultdict(float)
+    for t_ms, d in zip(times[1:], dpnl, strict=True):
+        monthly[_month(int(t_ms))] += float(d)
+    if monthly:
+        m.acct_n_months = len(monthly)
+        m.acct_positive_month_share = sum(1 for v in monthly.values() if v > 0) / len(monthly)
     if m.acct_cagr is not None and m.acct_max_dd and m.acct_max_dd > 0:
         m.acct_calmar = m.acct_cagr / m.acct_max_dd
 

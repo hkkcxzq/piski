@@ -56,11 +56,15 @@ def render_report(result: AnalysisResult) -> str:
     )
     add(f"Рыночный контекст рассчитан для: {', '.join(result.context_coins) or '—'}.")
     add("")
+    add(_population_summary(ok))
     add("## Рейтинг качества (не по ROI)")
     add("")
     add(
-        "Компоненты: значимость средней сделки (t-stat), Sortino, max drawdown, доля прибыльных месяцев, "
-        "альфа к BTC, размер выборки; штрафы за мартингейл, концентрацию PnL, ликвидации, высокое плечо."
+        "Компоненты: значимость доходности счёта (t-stat), Sortino, max drawdown, доля прибыльных месяцев, "
+        "альфа к BTC, размер выборки; штрафы за мартингейл, концентрацию PnL, ликвидации, высокое плечо. "
+        "Значимость и стабильность считаются по истории счёта, включающей нереализованный PnL: у трейдеров, "
+        "которые фиксируют прибыль частями и не закрывают убыточные позиции, статистика по закрытым ордерам "
+        "(Win %, PF в таблице) завышена."
     )
     add("")
     add(
@@ -166,3 +170,38 @@ def _roi_vs_quality(ok: list[TraderMetrics], score_by: Mapping[str, QualityScore
         f"Из 10 трейдеров с наибольшим PnL в топ-10 рейтинга качества попали {in_top}. "
         "Расхождение показывает, насколько «самые прибыльные» отличаются от «самых надёжных».\n"
     )
+
+
+def _population_summary(ok: list[TraderMetrics]) -> str:
+    """Key facts about the rated population, computed, not hand-written."""
+    if not ok:
+        return ""
+    dds = [m.acct_max_dd for m in ok if m.acct_max_dd is not None]
+    tstats = [m for m in ok if m.acct_t_stat is not None]
+    significant = [m for m in tstats if (m.acct_t_stat or 0) > 2]
+    robust = [m for m in significant if (m.acct_max_dd if m.acct_max_dd is not None else 1.0) < 0.5]
+    robust_clean = [m for m in robust if not m.flags]
+    n = len(ok)
+    lines = ["## Главное о выборке", ""]
+    if dds:
+        dds_sorted = sorted(dds)
+        median = dds_sorted[len(dds_sorted) // 2]
+        lines.append(
+            f"- Максимальная просадка счёта: медиана **{median:.0%}**; больше 50 % — у "
+            f"{sum(d > 0.5 for d in dds)} из {len(dds)}, больше 90 % — у {sum(d > 0.9 for d in dds)}."
+        )
+    lines.append(
+        f"- Ликвидации в наблюдаемом окне — у {sum('liquidated' in m.flags for m in ok)} из {n}; "
+        f"признаки мартингейла (доливка в убыточную позицию) — у {sum('martingale_like' in m.flags for m in ok)}."
+    )
+    lines.append(
+        f"- Статистически значимая доходность счёта (t > 2) — у {len(significant)} из {len(tstats)}; "
+        f"из них с просадкой меньше 50 % — {len(robust)}, и без тревожных флагов — {len(robust_clean)}."
+    )
+    styles = Counter(m.style.value for m in ok if m.style)
+    lines.append(
+        "- Стили: " + ", ".join(f"{k} — {v}" for k, v in sorted(styles.items())) + ". Лидерборд по PnL "
+        "заполнен позиционными трейдерами с высоким риском, а не скальперами."
+    )
+    lines.append("")
+    return "\n".join(lines) + "\n"

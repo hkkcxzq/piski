@@ -1,5 +1,8 @@
 """Quality rating of a trading history. ROI is deliberately *not* an input.
 
+Significance and stability come from the account's PnL history (which includes
+unrealized PnL) whenever it is available; see ``_significance``.
+
 Each component is a percentile rank inside the population of traders with enough data,
 so the score is relative ("better than X % of the observed population"), robust to
 outliers, and comparable across components. Penalties are multiplicative and explicit.
@@ -12,14 +15,35 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from quant.stats.metrics import percentile_ranks
-from quant.traders.metrics import Status, TraderMetrics
+from quant.traders.metrics import Status, TraderMetrics, TradeUnit
+
+
+def _significance(m: TraderMetrics) -> float | None:
+    """Prefer the account-level t-statistic: it includes unrealized PnL.
+
+    Per-trade statistics built from *closing orders* are biased towards traders who
+    take profits and leave losers open (they can show a 100 % win rate while the
+    account is deep under water), so they are used only for flat-to-flat round trips.
+    """
+    if m.acct_t_stat is not None:
+        return m.acct_t_stat
+    return m.t_stat_bps if m.trade_unit is TradeUnit.ROUND_TRIP else None
+
+
+def _stability(m: TraderMetrics) -> float | None:
+    if m.acct_n_months >= 3:
+        return m.acct_positive_month_share
+    if m.trade_unit is TradeUnit.ROUND_TRIP and m.n_months >= 3:
+        return m.positive_month_share
+    return None
+
 
 # weight, getter (higher = better)
 COMPONENTS: dict[str, tuple[float, Callable[[TraderMetrics], float | None]]] = {
-    "significance": (0.25, lambda m: m.t_stat_bps),
+    "significance": (0.25, _significance),
     "risk_adjusted": (0.20, lambda m: m.acct_sortino),
     "drawdown": (0.15, lambda m: None if m.acct_max_dd is None else -m.acct_max_dd),
-    "stability": (0.15, lambda m: m.positive_month_share if m.n_months >= 3 else None),
+    "stability": (0.15, _stability),
     "alpha": (0.15, lambda m: m.alpha_annual),
     "sample_size": (0.10, lambda m: float(m.n_trades)),
 }
