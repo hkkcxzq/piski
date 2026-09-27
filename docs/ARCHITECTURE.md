@@ -1,6 +1,7 @@
 # Архитектура системы систематической торговли (scalping, crypto futures)
 
-> Статус документа: **v0.1 — архитектурный анализ** (до написания кода).
+> Статус документа: **v0.2** — учтены решения владельца из [DECISIONS.md](DECISIONS.md)
+> (запуск на домашнем компьютере, SQLite по умолчанию, анализ трейдеров — первым этапом).
 > Приоритет решений: CORRECTNESS > ROBUSTNESS > RISK MANAGEMENT > MAINTAINABILITY > PERFORMANCE > PROFITABILITY.
 > Стартовая биржа: **Bybit (USDT-perpetual, V5 API)**. Стартовый режим торговли: **только демо-счёт**.
 
@@ -422,8 +423,8 @@ exit, pnl, reason_for_entry, reason_for_exit` + `venue` (backtest/paper/demo/liv
 **Два хранилища с разными задачами:**
 
 1. **Parquet + DuckDB** — рыночные данные и фичи (большие, неизменяемые, колоночные).
-2. **PostgreSQL** (SQLAlchemy 2 + Alembic миграции; SQLite допустим для разработки) —
-   транзакционные данные.
+2. **SQLite** по умолчанию (D-001: домашний компьютер, без серверов) через SQLAlchemy 2 + Alembic,
+   с возможностью переключиться на **PostgreSQL** без изменения кода — транзакционные данные.
 
 **Основные таблицы:**
 ```
@@ -558,12 +559,12 @@ CI: GitHub Actions — lint, typecheck, unit/property/golden тесты на к�
 | Данные | `polars`, `pyarrow`, **DuckDB**, Parquet | быстро, колоночно, без отдельного сервера |
 | Вычисления | `numpy`, `numba` (горячие циклы симулятора) | скорость без переписывания на C++ |
 | Статистика/ML | `scipy`, `statsmodels`, `scikit-learn` | тесты значимости, простые интерпретируемые модели |
-| БД | **PostgreSQL** + SQLAlchemy 2 + Alembic | транзакции, append-only журналы |
+| БД | **SQLite** (по умолчанию) / PostgreSQL + SQLAlchemy 2 + Alembic | транзакции, append-only журналы |
 | API/UI | FastAPI + Plotly (+ HTMX/React) | dashboard и управление |
 | Алерты | Telegram Bot API | мгновенные уведомления на телефон |
 | Логи/метрики | `structlog` (JSON), опционально Prometheus + Grafana | наблюдаемость |
 | Тесты | pytest, hypothesis, mypy, ruff | качество |
-| Деплой | Docker Compose на VPS (Сингапур) | воспроизводимость |
+| Запуск | домашний компьютер владельца (D-001), venv + CLI; Docker/VPS — опционально позже | простота, без платной инфраструктуры |
 
 Если в будущем понадобится латентность < 1 мс — горячий путь исполнения выносится в
 Rust, интерфейсы для этого уже разделены. Сейчас это преждевременно.
