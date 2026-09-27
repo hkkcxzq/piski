@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import shutil
 import sys
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from quant.app.config import ConfigError, Settings, load_settings
 from quant.app.logging import configure_logging, get_logger
 from quant.core.ratelimit import WeightRateLimiter
+from quant.data.bybit_archive import DayResult, date_range, download
 from quant.exchanges.hyperliquid.client import HyperliquidError, HyperliquidInfoClient
 from quant.traders.pipeline import analyze, collect, save_analysis
 from quant.traders.report import render_report
@@ -68,6 +70,27 @@ def cmd_traders_analyze(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_bybit(settings: Settings, args: argparse.Namespace) -> int:
+    days = date_range(dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end))
+    done = {"n": 0}
+
+    def progress(r: DayResult) -> None:
+        done["n"] += 1
+        if r.status != "ok" or done["n"] % 25 == 0:
+            print(f"[{done['n']}/{len(days)}] {r.day} {r.status} {r.detail}", file=sys.stderr, flush=True)  # noqa: T201
+
+    results = download(settings.data_dir, args.symbol, days, workers=args.workers, progress=progress)
+    bad = [r for r in results if r.status in ("error", "missing")]
+    log.info(
+        "bybit_archive_done",
+        symbol=args.symbol,
+        fetched=sum(r.status == "ok" for r in results),
+        missing=sum(r.status == "missing" for r in results),
+        errors=sum(r.status == "error" for r in results),
+    )
+    return 1 if any(r.status == "error" for r in bad) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant", description="Systematic trading research system")
     parser.add_argument("--config", action="append", type=Path, help="extra YAML config (repeatable)")
@@ -80,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     a = tsub.add_parser("analyze", help="compute metrics, rating, patterns and hypotheses offline")
     a.add_argument("--publish", default=None, help="also copy report + hypotheses into this directory")
     a.set_defaults(func=cmd_traders_analyze)
+    data = sub.add_parser("data", help="market data")
+    dsub = data.add_subparsers(dest="action", required=True)
+    b = dsub.add_parser("bybit-archive", help="download Bybit public trade archive as 1m bars")
+    b.add_argument("--symbol", default="BTCUSDT")
+    b.add_argument("--start", required=True, help="YYYY-MM-DD")
+    b.add_argument("--end", required=True, help="YYYY-MM-DD")
+    b.add_argument("--workers", type=int, default=4)
+    b.set_defaults(func=cmd_data_bybit)
     return parser
 
 

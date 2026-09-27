@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",
+    "numba>=0.60",
     "numpy>=1.26",
+    "pandas>=2.2",
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "scipy>=1.13",
@@ -21,6 +23,7 @@ dependencies = [
 dev = [
     "hypothesis>=6.100",
     "mypy>=1.10",
+    "pandas-stubs>=2.2",
     "pytest>=8.2",
     "ruff>=0.5",
     "types-PyYAML>=6.0",
@@ -48,12 +51,14 @@ ignore = [
     "PLR0913",  # many-args functions are explicit by design in config-heavy code
     "PLR2004",  # magic numbers are fine in statistics code with named context
     "PLR0911", "PLR0912", "PLR0915",  # long numeric/reporting routines are kept linear on purpose
+    "E741",     # `l` is the conventional name for bar lows (OHLC)
     "S311",     # `random` is used for reproducible research sampling, never for security
     "RUF001", "RUF002", "RUF003",  # Cyrillic text in strings/comments is intentional
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "PLR0915", "PLR0917"]
+"src/quant/backtest/engine.py" = ["PLR0917"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -63,5 +68,5 @@ mypy_path = "src"
 packages = ["quant"]
 
 [[tool.mypy.overrides]]
-module = ["scipy", "scipy.*"]
+module = ["scipy", "scipy.*", "numba", "numba.*"]
 ignore_missing_imports = true
