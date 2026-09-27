@@ -1,2 +1,13 @@
-# piski
-asdfaf afs af 
+# piski — систематическая торговля криптофьючерсами
+
+Исследовательская и торговая система для скальпинга на криптофьючерсах
+(стартовая биржа — Bybit, стартовый режим — **демо-счёт**).
+
+- [Архитектура](docs/ARCHITECTURE.md)
+- [План разработки](docs/ROADMAP.md)
+
+Pipeline стратегии: IDEA → BACKTEST → OUT-OF-SAMPLE → WALK-FORWARD → MONTE CARLO →
+PAPER/DEMO → REVIEW → LIMITED LIVE → FULL DEPLOYMENT.
+
+> Ни один бэктест не гарантирует будущей прибыли. Реальная торговля включается
+> только вручную после демо-периода.
