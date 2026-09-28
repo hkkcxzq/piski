@@ -13,10 +13,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import ssl
 import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+
+import certifi
 
 from quant.app.logging import get_logger
 from quant.exchanges.bybit.client import BybitClient, BybitError
@@ -97,7 +100,9 @@ class Recorder:
         args = [f"allLiquidation.{s}" for s in self.symbols]
         while True:
             try:
-                async with websockets.connect(PUBLIC_WS, ping_interval=None) as ws:
+                # certifi CA bundle: python.org builds on macOS ship without system certificates
+                tls = ssl.create_default_context(cafile=certifi.where())
+                async with websockets.connect(PUBLIC_WS, ping_interval=None, ssl=tls) as ws:
                     await ws.send(json.dumps({"op": "subscribe", "args": args}))
                     log.info("liquidations_connected", topics=args)
                     last_ping = time.monotonic()

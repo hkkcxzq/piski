@@ -127,7 +127,7 @@ class NewsMonitor:
             fetched=res.fetched,
             new=res.new,
             classified=res.classified,
-            level=res.state.level.name,
+            risk=res.state.level.name,
             feed_errors=len(res.feed_errors),
         )
         return res

@@ -201,7 +201,7 @@ class LiveEngine:
                 for symbol in self.symbols:
                     self._maybe_enter(st, symbol, now, equity, level)
             elif level >= RiskLevel.PAUSE_NEW:
-                self._event("entries_paused", level=level.name, reason=why)
+                self._event("entries_paused", risk=level.name, reason=why)
             log.info(
                 "live_heartbeat",
                 equity=str(equity),
