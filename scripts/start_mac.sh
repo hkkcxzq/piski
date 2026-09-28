@@ -14,7 +14,7 @@ set -a; [ -f .env ] && source .env; set +a
 export QUANT_MODE="${QUANT_MODE:-demo}"
 mkdir -p data/logs
 trap 'kill 0' EXIT
-caffeinate -dimsu &
+caffeinate -ims &  # не даём Mac уснуть, экран при этом может гаснуть
 quant record >> data/logs/record.log 2>&1 &
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   quant news watch --interval 180 >> data/logs/news.log 2>&1 &
