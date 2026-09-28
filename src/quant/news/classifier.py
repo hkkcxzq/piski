@@ -107,6 +107,8 @@ class ClassifierError(RuntimeError):
 
 # A transport takes (system, user_message, schema) and returns the raw JSON text; tests inject fakes.
 Transport = Callable[[str, str, dict[str, Any]], str]
+# A classifier turns headlines into assessments: Claude (via a transport) or the free keyword rules.
+Classifier = Callable[[Sequence[Headline], str], list[Assessment]]
 
 
 def anthropic_transport(model: str = DEFAULT_MODEL, effort: str = "low") -> Transport:
@@ -147,3 +149,10 @@ def classify(headlines: Sequence[Headline], transport: Transport, now_iso: str) 
         raise ClassifierError(f"invalid classifier output: {exc}") from exc
     known = {h.id for h in headlines}
     return [a for a in batch.assessments if a.id in known]
+
+
+def llm_classifier(transport: Transport) -> Classifier:
+    def run(headlines: Sequence[Headline], now_iso: str) -> list[Assessment]:
+        return classify(headlines, transport, now_iso)
+
+    return run

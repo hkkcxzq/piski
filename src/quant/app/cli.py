@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import shutil
 import sys
 import time
@@ -140,7 +141,8 @@ def _telegram_notifier(settings: Settings) -> Callable[[str], None] | None:
 
 
 def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
-    from quant.news.classifier import anthropic_transport  # noqa: PLC0415
+    from quant.news.classifier import Classifier, anthropic_transport, llm_classifier  # noqa: PLC0415
+    from quant.news.keywords import keyword_classify  # noqa: PLC0415
     from quant.news.monitor import NewsMonitor  # noqa: PLC0415
     from quant.news.policy import load_state  # noqa: PLC0415
 
@@ -148,9 +150,12 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
         state = load_state(settings.data_dir / "news" / "risk_state.json")
         print(state.level.name, *state.reasons, sep="\n")  # noqa: T201
         return 0
-    monitor = NewsMonitor(
-        settings.data_dir, anthropic_transport(args.model, args.effort), notify=_telegram_notifier(settings)
+    use_claude = args.classifier == "claude" or (args.classifier == "auto" and os.environ.get("ANTHROPIC_API_KEY"))
+    classifier: Classifier = (
+        llm_classifier(anthropic_transport(args.model, args.effort)) if use_claude else keyword_classify
     )
+    print(f"news classifier: {'claude' if use_claude else 'keywords (free)'}", file=sys.stderr)  # noqa: T201
+    monitor = NewsMonitor(settings.data_dir, classifier, notify=_telegram_notifier(settings))
     if args.action == "once":
         res = monitor.run_once()
         print(f"fetched={res.fetched} new={res.new} classified={res.classified} level={res.state.level.name}")  # noqa: T201
@@ -263,6 +268,12 @@ def build_parser() -> argparse.ArgumentParser:
         n.add_argument("--interval", type=float, default=180.0, help="seconds between cycles (watch)")
         n.add_argument("--model", default="claude-opus-5")
         n.add_argument("--effort", default="low", choices=["low", "medium", "high"])
+        n.add_argument(
+            "--classifier",
+            default="auto",
+            choices=["auto", "claude", "keywords"],
+            help="auto: Claude if ANTHROPIC_API_KEY is set, otherwise free keyword rules",
+        )
         n.set_defaults(func=cmd_news)
     rec = sub.add_parser("record", help="record liquidations, open interest and funding (owner's computer)")
     rec.add_argument("--interval", type=float, default=60.0)

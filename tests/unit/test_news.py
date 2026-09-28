@@ -6,8 +6,9 @@ import httpx
 import numpy as np
 import pytest
 
-from quant.news.classifier import Assessment, ClassifierError, Direction, Severity, classify
-from quant.news.feeds import Headline, parse_feed
+from quant.news.classifier import Assessment, ClassifierError, Direction, Severity, classify, llm_classifier
+from quant.news.feeds import Headline, parse_bybit_announcements, parse_feed
+from quant.news.keywords import keyword_classify
 from quant.news.monitor import NewsMonitor
 from quant.news.policy import (
     MINUTE_MS,
@@ -159,7 +160,7 @@ def test_monitor_cycle_end_to_end(tmp_path: Path) -> None:
     notes: list[str] = []
     mon = NewsMonitor(
         tmp_path,
-        transport,
+        llm_classifier(transport),
         http=httpx.Client(transport=httpx.MockTransport(handler)),
         feeds={"x": "https://feed"},
         clock=lambda: pub + 60_000,
@@ -174,3 +175,79 @@ def test_monitor_cycle_end_to_end(tmp_path: Path) -> None:
     again = mon.run_once()  # same feed again: nothing new, no model call
     assert again.new == 0 and calls["n"] == 1
     assert again.state.level is RiskLevel.FLATTEN
+
+
+BYBIT_JSON = json.dumps(
+    {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+            "total": 2,
+            "list": [
+                {
+                    "title": "Delisting of ETHUSDT Perpetual Contract",
+                    "description": "Bybit will delist...",
+                    "type": {"title": "Delistings", "key": "delistings"},
+                    "tags": ["Derivatives"],
+                    "url": "https://announcements.bybit.com/a/1",
+                    "dateTimestamp": NOW - 1000,
+                    "publishTime": NOW - 500,
+                },
+                {
+                    "title": "New Listing: FOOUSDT Perpetual",
+                    "description": "",
+                    "type": {"title": "New Listings", "key": "new_crypto"},
+                    "tags": [],
+                    "url": "https://announcements.bybit.com/a/2",
+                    "dateTimestamp": NOW - 2000,
+                },
+            ],
+        },
+    }
+)
+
+
+def test_parse_bybit_announcements() -> None:
+    hs = parse_bybit_announcements(BYBIT_JSON)
+    assert [h.title for h in hs] == ["Delisting of ETHUSDT Perpetual Contract", "New Listing: FOOUSDT Perpetual"]
+    assert hs[0].source == "bybit" and hs[0].published_ms == NOW - 500 and "[delistings]" in hs[0].summary
+    assert hs[1].published_ms == NOW - 2000
+    with pytest.raises(ValueError, match="retCode"):
+        parse_bybit_announcements(json.dumps({"retCode": 10001, "retMsg": "bad"}))
+
+
+def _h(title: str, source: str = "x") -> Headline:
+    return Headline(title[:20], source, title, "", "", NOW)
+
+
+@pytest.mark.parametrize(
+    ("title", "source", "severity"),
+    [
+        ("Exchange XYZ hacked, $230 million drained from hot wallet", "x", Severity.HIGH),
+        ("DeFi protocol exploited for $12M", "x", Severity.HIGH),
+        ("Major exchange halts withdrawals amid liquidity concerns", "x", Severity.HIGH),
+        ("USDC loses its peg after bank failure", "x", Severity.HIGH),
+        ("Fed announces emergency rate cut", "x", Severity.HIGH),
+        ("SEC sues crypto exchange over unregistered securities", "x", Severity.MEDIUM),
+        ("SEC approves spot Solana ETF", "x", Severity.MEDIUM),
+        ("Country bans crypto trading", "x", Severity.MEDIUM),
+        ("Delisting of ETHUSDT Perpetual Contract", "bybit", Severity.MEDIUM),
+        ("Delisting of ETHUSDT Perpetual Contract", "x", Severity.NONE),  # Bybit rule only for Bybit
+        ("New Listing: FOOUSDT Perpetual", "bybit", Severity.NONE),
+        ("Bitcoin price recap: BTC holds $60k", "x", Severity.NONE),
+        ("ETHGlobal hackathon awards $1M in prizes", "x", Severity.NONE),
+    ],
+)
+def test_keyword_rules(title: str, source: str, severity: Severity) -> None:
+    [a] = keyword_classify([_h(title, source)], "2027-01-15T08:00:00+00:00")
+    assert a.severity is severity
+    assert a.severity is not Severity.CRITICAL
+
+
+def test_keyword_high_pauses_but_never_flattens() -> None:
+    [a] = keyword_classify([_h("Exchange hacked, $1.5B stolen")], "")
+    sig = signal_from_assessment(a, "t", NOW)
+    assert sig is not None and sig.level is RiskLevel.PAUSE_NEW
+    [b] = keyword_classify([_h("SEC sues exchange")], "")
+    sig_b = signal_from_assessment(b, "t", NOW)
+    assert sig_b is not None and sig_b.level is RiskLevel.CAUTION

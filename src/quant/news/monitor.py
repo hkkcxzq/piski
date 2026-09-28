@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 
 from quant.app.logging import get_logger
-from quant.news.classifier import ClassifierError, Transport, classify
+from quant.news.classifier import Classifier, ClassifierError
 from quant.news.feeds import DEFAULT_FEEDS, Headline, fetch_all
 from quant.news.policy import RiskState, load_state, save_state, signal_from_assessment, update_state
 
@@ -44,14 +44,14 @@ class NewsMonitor:
     def __init__(
         self,
         data_dir: Path,
-        transport: Transport,
+        classifier: Classifier,
         http: httpx.Client | None = None,
         feeds: dict[str, str] | None = None,
         clock: Callable[[], int] | None = None,
         notify: Callable[[str], None] | None = None,
     ) -> None:
         self.dir = data_dir / "news"
-        self.transport = transport
+        self.classifier = classifier
         self.http = http or httpx.Client(timeout=20.0, follow_redirects=True)
         self.feeds = feeds or DEFAULT_FEEDS
         self.clock = clock or (lambda: int(time.time() * 1000))
@@ -95,7 +95,7 @@ class NewsMonitor:
         for i in range(0, len(fresh), BATCH):
             chunk = fresh[i : i + BATCH]
             try:
-                assessments = classify(chunk, self.transport, now_iso)
+                assessments = self.classifier(chunk, now_iso)
             except ClassifierError as exc:
                 res.classifier_error = str(exc)
                 log.warning("news_classifier_failed", error=str(exc))

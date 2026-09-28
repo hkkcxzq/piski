@@ -16,10 +16,11 @@ mkdir -p data/logs
 trap 'kill 0' EXIT
 caffeinate -ims &  # не даём Mac уснуть, экран при этом может гаснуть
 quant record >> data/logs/record.log 2>&1 &
+quant news watch --interval 180 >> data/logs/news.log 2>&1 &
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-  quant news watch --interval 180 >> data/logs/news.log 2>&1 &
+  echo "Новости: оценивает Claude"
 else
-  echo "ANTHROPIC_API_KEY не задан — новостной монитор не запущен (фильтр ФРС всё равно действует)"
+  echo "Новости: бесплатные правила по ключевым словам (ANTHROPIC_API_KEY не задан)"
 fi
 echo "Движок запущен (режим: $QUANT_MODE). Логи: data/logs/. Статус: quant live status. Аварийно: quant live kill"
 quant live run --interval 60 2>&1 | tee -a data/logs/live.log

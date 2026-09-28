@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
@@ -25,6 +26,8 @@ DEFAULT_FEEDS: dict[str, str] = {
     "decrypt": "https://decrypt.co/feed",
     "sec": "https://www.sec.gov/news/pressreleases.rss",
     "fed": "https://www.federalreserve.gov/feeds/press_all.xml",
+    # official Bybit announcements (JSON API, public): delistings, contract changes, maintenance
+    "bybit": "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=20",
 }
 
 
@@ -109,6 +112,25 @@ def parse_feed(source: str, xml_text: str) -> list[Headline]:
     return out
 
 
+def parse_bybit_announcements(json_text: str) -> list[Headline]:
+    """Bybit ``/v5/announcements/index`` → headlines. Type and tags go into the summary."""
+    body = json.loads(json_text)
+    if body.get("retCode") != 0:
+        raise ValueError(f"bybit announcements retCode={body.get('retCode')} {body.get('retMsg')}")
+    out: list[Headline] = []
+    for it in (body.get("result") or {}).get("list") or []:
+        title = _clean(it.get("title"))
+        if not title:
+            continue
+        kind = (it.get("type") or {}).get("key", "")
+        tags = ", ".join(str(t) for t in it.get("tags") or [])
+        summary = _clean(f"[{kind}] [{tags}] {it.get('description') or ''}")
+        url = str(it.get("url") or "")
+        ts = it.get("publishTime") or it.get("dateTimestamp")
+        out.append(Headline(_id("bybit", url or title), "bybit", title, summary, url, int(ts) if ts else None))
+    return out
+
+
 def fetch_all(feeds: dict[str, str], http: httpx.Client) -> tuple[list[Headline], dict[str, str]]:
     """Fetch every feed; a failing feed is reported, never fatal."""
     headlines: list[Headline] = []
@@ -117,7 +139,10 @@ def fetch_all(feeds: dict[str, str], http: httpx.Client) -> tuple[list[Headline]
         try:
             resp = http.get(url, headers={"User-Agent": "Mozilla/5.0 (quant-news-monitor)"})
             resp.raise_for_status()
-            headlines.extend(parse_feed(source, resp.text))
+            if "/v5/announcements" in url:
+                headlines.extend(parse_bybit_announcements(resp.text))
+            else:
+                headlines.extend(parse_feed(source, resp.text))
         except (httpx.HTTPError, ElementTree.ParseError, ValueError) as exc:
             errors[source] = repr(exc)[:200]
     return headlines, errors
