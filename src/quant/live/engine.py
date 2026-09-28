@@ -202,6 +202,13 @@ class LiveEngine:
                     self._maybe_enter(st, symbol, now, equity, level)
             elif level >= RiskLevel.PAUSE_NEW:
                 self._event("entries_paused", level=level.name, reason=why)
+            log.info(
+                "live_heartbeat",
+                equity=str(equity),
+                risk=level.name,
+                open=",".join(st.open_trades) or "-",
+                halted=st.halted or "no",
+            )
         finally:
             self.store.save(st)
         return st
