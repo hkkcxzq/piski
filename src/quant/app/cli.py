@@ -91,6 +91,22 @@ def cmd_data_bybit(settings: Settings, args: argparse.Namespace) -> int:
     return 1 if any(r.status == "error" for r in bad) else 0
 
 
+def cmd_research_exp001(settings: Settings, args: argparse.Namespace) -> int:
+    from quant.research import experiment001  # heavy imports (numba) only when needed  # noqa: PLC0415
+    from quant.traders.store import write_json  # noqa: PLC0415
+
+    def progress(n: int, total: int, key: str) -> None:
+        print(f"[{n}/{total}] {key}", file=sys.stderr, flush=True)  # noqa: T201
+
+    result = experiment001.run(settings.data_dir, progress=progress)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    write_json(out / "experiment-001.json", result)
+    (out / "experiment-001.md").write_text(experiment001.render(result), encoding="utf-8")
+    print(out / "experiment-001.md")  # noqa: T201
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant", description="Systematic trading research system")
     parser.add_argument("--config", action="append", type=Path, help="extra YAML config (repeatable)")
@@ -111,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--end", required=True, help="YYYY-MM-DD")
     b.add_argument("--workers", type=int, default=4)
     b.set_defaults(func=cmd_data_bybit)
+    research = sub.add_parser("research", help="pre-registered experiments")
+    rsub = research.add_subparsers(dest="action", required=True)
+    e1 = rsub.add_parser("exp001", help="experiment 001: first scalping hypotheses on Bybit")
+    e1.add_argument("--out", default="docs/research")
+    e1.set_defaults(func=cmd_research_exp001)
     return parser
 
 

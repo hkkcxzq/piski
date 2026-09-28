@@ -48,6 +48,7 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "N", "S", "DTZ", "T20"]
 ignore = [
+    "PLR0917",  # positional args are fine in numeric kernels
     "PLR0913",  # many-args functions are explicit by design in config-heavy code
     "PLR2004",  # magic numbers are fine in statistics code with named context
     "PLR0911", "PLR0912", "PLR0915",  # long numeric/reporting routines are kept linear on purpose
@@ -57,8 +58,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "PLR0915", "PLR0917"]
-"src/quant/backtest/engine.py" = ["PLR0917"]
+"tests/**" = ["S101", "PLR0915"]
 
 [tool.mypy]
 python_version = "3.12"

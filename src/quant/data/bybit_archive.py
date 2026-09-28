@@ -112,12 +112,17 @@ def fetch_day(root: Path, symbol: str, day: dt.date, timeout: float = 120.0) -> 
         if resp.status_code == 404:
             return DayResult(day, "missing")
         resp.raise_for_status()
-        bars = aggregate_trades(parse_csv(resp.content))
+        df = parse_csv(resp.content)
     except (httpx.HTTPError, ArchiveError, ValueError, OSError, EOFError) as exc:
         return DayResult(day, "error", detail=repr(exc)[:200])
     day_start = int(dt.datetime.combine(day, dt.time(), tzinfo=dt.UTC).timestamp() * 1000)
-    if bars["t"].size and (bars["t"][0] < day_start or bars["t"][-1] >= day_start + 86_400_000):
-        return DayResult(day, "error", detail="trades outside the file's UTC day")
+    ts = np.round(df["timestamp"].to_numpy(dtype=np.float64) * 1000.0)  # same rounding as aggregate_trades
+    inside = (ts >= day_start) & (ts < day_start + 86_400_000)
+    outside = int((~inside).sum())
+    # a few boundary trades can land in the neighbouring day's file; more means a broken file
+    if outside > max(100, 0.001 * len(df)):
+        return DayResult(day, "error", detail=f"{outside} trades outside the file's UTC day")
+    bars = aggregate_trades(df[inside])
     _atomic_save(path, bars)
     return DayResult(day, "ok", int(bars["t"].size))
 

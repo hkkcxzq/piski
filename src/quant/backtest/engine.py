@@ -194,6 +194,17 @@ def _simulate(  # type: ignore[no-untyped-def]
                 expire_bar = i + expiry[i]
                 state = 1
         i += 1
+    if state == 2:  # still open when data ends: close at the last close (no fee assumptions change)
+        ex = c[n - 1]
+        t_entry_i[k] = entry_bar
+        t_exit_i[k] = n - 1
+        t_side[k] = s
+        t_entry[k] = px
+        t_exit[k] = ex
+        t_stop_frac[k] = sd / px
+        t_net[k] = s * (ex - px) / px - fee_in - taker
+        t_reason[k] = 4
+        k += 1
     return (t_entry_i[:k], t_exit_i[:k], t_side[:k], t_entry[:k], t_exit[:k], t_stop_frac[:k], t_net[:k], t_reason[:k])
 
 
