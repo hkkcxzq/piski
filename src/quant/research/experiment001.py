@@ -19,7 +19,7 @@ from quant.backtest.engine import Costs, Signals, Trades, simulate
 from quant.backtest.metrics import Summary, summarize
 from quant.data.bars import Bars, load_minutes, resample
 from quant.stats.metrics import profit_factor, t_statistic
-from quant.strategies.scalping import grid
+from quant.strategies.scalping import Variant, grid
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT")
 START, END = dt.date(2021, 1, 1), dt.date(2026, 9, 26)
@@ -29,6 +29,7 @@ SPLITS = {
     "holdout": (dt.date(2025, 7, 1), dt.date(2026, 9, 27)),
 }
 MIN_DEV_TRADES = 200
+DEFAULT_COSTS = Costs()
 MIN_VAL_TRADES = 50
 
 
@@ -63,15 +64,20 @@ def run_split(bars: Bars, sig: Signals, split: str, costs: Costs) -> tuple[Trade
     return t, summarize(t, part.t, (b_d - a_d).days, rt_bps)
 
 
-def run(root: Path, costs: Costs = Costs(), progress: Any = None) -> dict[str, Any]:  # noqa: B008
+def run(
+    root: Path,
+    costs: Costs = DEFAULT_COSTS,
+    progress: Any = None,
+    variants: list[Variant] | None = None,
+) -> dict[str, Any]:
     minutes = {s: load_minutes(root, s, START, END) for s in SYMBOLS}
     frames: dict[tuple[str, int], Bars] = {}
     for s, m in minutes.items():
         frames[(s, 1)] = m
-        for tf in (5, 15):
+        for tf in sorted({v.timeframe_min for v in (variants or grid())} - {1}):
             frames[(s, tf)] = resample(m, tf)
 
-    variants = list(grid())
+    variants = list(variants) if variants is not None else list(grid())
     results: list[VariantResult] = []
     signals_cache: dict[tuple[str, str], Signals] = {}
     for n, var in enumerate(variants, 1):
@@ -161,14 +167,14 @@ def run(root: Path, costs: Costs = Costs(), progress: Any = None) -> dict[str, A
     }
 
 
-def render(result: dict[str, Any]) -> str:
+def render(result: dict[str, Any], number: str = "001") -> str:
     def f(x: Any, fmt: str = ".2f") -> str:
         return "—" if x is None else format(x, fmt)
 
     lines = [
-        "# Эксперимент 001 — результаты",
+        f"# Эксперимент {number} — результаты",
         "",
-        "План: `docs/research/preregistration-001.md` (записан до запуска). "
+        f"План: `docs/research/preregistration-{number}.md` (записан до запуска). "
         f"Попыток (вариантов): **{result['trials']}**. Издержки: taker {result['costs']['taker']:.4%}, "
         f"maker {result['costs']['maker']:.4%}, проскальзывание {result['costs']['slippage']:.4%}.",
         "",

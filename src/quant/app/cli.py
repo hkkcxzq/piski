@@ -98,12 +98,18 @@ def cmd_research_exp001(settings: Settings, args: argparse.Namespace) -> int:
     def progress(n: int, total: int, key: str) -> None:
         print(f"[{n}/{total}] {key}", file=sys.stderr, flush=True)  # noqa: T201
 
-    result = experiment001.run(settings.data_dir, progress=progress)
+    number = args.experiment
+    variants = None
+    if number == "002":
+        from quant.strategies.intraday import grid002  # noqa: PLC0415
+
+        variants = list(grid002())
+    result = experiment001.run(settings.data_dir, progress=progress, variants=variants)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    write_json(out / "experiment-001.json", result)
-    (out / "experiment-001.md").write_text(experiment001.render(result), encoding="utf-8")
-    print(out / "experiment-001.md")  # noqa: T201
+    write_json(out / f"experiment-{number}.json", result)
+    (out / f"experiment-{number}.md").write_text(experiment001.render(result, number), encoding="utf-8")
+    print(out / f"experiment-{number}.md")  # noqa: T201
     return 0
 
 
@@ -129,9 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     b.set_defaults(func=cmd_data_bybit)
     research = sub.add_parser("research", help="pre-registered experiments")
     rsub = research.add_subparsers(dest="action", required=True)
-    e1 = rsub.add_parser("exp001", help="experiment 001: first scalping hypotheses on Bybit")
-    e1.add_argument("--out", default="docs/research")
-    e1.set_defaults(func=cmd_research_exp001)
+    for number, help_ in (("001", "first scalping hypotheses"), ("002", "intraday hypotheses (15m-4h)")):
+        e = rsub.add_parser(f"exp{number}", help=f"experiment {number}: {help_}")
+        e.add_argument("--out", default="docs/research")
+        e.set_defaults(func=cmd_research_exp001, experiment=number)
     return parser
 
 

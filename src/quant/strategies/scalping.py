@@ -85,7 +85,7 @@ def _finish(
     return sig
 
 
-def fvg(b: Bars, min_gap: float, r: float, trend: bool, active: bool) -> Signals:
+def fvg(b: Bars, min_gap: float, r: float, trend: bool, active: bool, hold: int = 48) -> Signals:
     a = atr(b, 14)
     h2 = np.r_[np.nan, np.nan, b.h[:-2]]
     l2 = np.r_[np.nan, np.nan, b.l[:-2]]
@@ -104,7 +104,7 @@ def fvg(b: Bars, min_gap: float, r: float, trend: bool, active: bool) -> Signals
     entry = np.where(bull, b.l, np.where(bear, b.h, np.nan))  # retrace to the near edge of the gap
     far = np.where(bull, h2 - 0.1 * a, np.where(bear, l2 + 0.1 * a, np.nan))
     stop = np.abs(entry - far)
-    return _finish(b, side, stop, r, 48, active, np.where(np.isfinite(entry), entry, b.c), entry, 12)
+    return _finish(b, side, stop, r, hold, active, np.where(np.isfinite(entry), entry, b.c), entry, 12)
 
 
 def exhaustion(b: Bars, thr: float, r: float, hold: int, active: bool) -> Signals:
@@ -123,7 +123,7 @@ def exhaustion(b: Bars, thr: float, r: float, hold: int, active: bool) -> Signal
     return _finish(b, side, stop, r, hold, active, b.c)
 
 
-def squeeze(b: Bars, n: int, ratio: float, r: float, active: bool) -> Signals:
+def squeeze(b: Bars, n: int, ratio: float, r: float, active: bool, hold: int = 48) -> Signals:
     hi = _s(b.h).rolling(n).max().shift(1).to_numpy()
     lo = _s(b.l).rolling(n).min().shift(1).to_numpy()
     width = hi - lo
@@ -136,7 +136,7 @@ def squeeze(b: Bars, n: int, ratio: float, r: float, active: bool) -> Signals:
     side = np.where(long_, 1, np.where(short, -1, 0))
     mid = (hi + lo) / 2
     stop = np.where(side != 0, np.abs(b.c - mid), np.nan)
-    return _finish(b, side, stop, r, 48, active, b.c)
+    return _finish(b, side, stop, r, hold, active, b.c)
 
 
 def flow(b: Bars, k: int, imb: float, mode: str, active: bool) -> Signals:
