@@ -4,6 +4,7 @@ import pytest
 from quant.data.bars import Bars
 from quant.strategies.intraday import grid002
 from quant.strategies.scalping import fvg, grid
+from quant.strategies.trend import grid003
 
 MIN = 60_000
 
@@ -36,7 +37,7 @@ def test_fvg_detects_bullish_gap_and_places_limit_and_stop() -> None:
     assert sig.tp_dist[42] == pytest.approx(2.0 * sig.stop_dist[42])
 
 
-@pytest.mark.parametrize("variant", [*grid(), *grid002()], ids=lambda v: v.key)
+@pytest.mark.parametrize("variant", [*grid(), *grid002(), *grid003()], ids=lambda v: v.key)
 def test_signals_are_causal(variant) -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(1)
     n = 6000

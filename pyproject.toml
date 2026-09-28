@@ -9,6 +9,8 @@ description = "Systematic research and trading system for crypto futures"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=1.8",
+    "defusedxml>=0.7",
     "httpx>=0.27",
     "numba>=0.60",
     "numpy>=1.26",
@@ -27,6 +29,7 @@ dev = [
     "pytest>=8.2",
     "ruff>=0.5",
     "types-PyYAML>=6.0",
+    "types-defusedxml>=0.7",
 ]
 
 [project.scripts]

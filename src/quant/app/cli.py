@@ -7,6 +7,7 @@ import datetime as dt
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from quant.app.config import ConfigError, Settings, load_settings
@@ -104,12 +105,59 @@ def cmd_research_exp001(settings: Settings, args: argparse.Namespace) -> int:
         from quant.strategies.intraday import grid002  # noqa: PLC0415
 
         variants = list(grid002())
+    elif number == "003":
+        from quant.strategies.trend import grid003  # noqa: PLC0415
+
+        variants = list(grid003())
     result = experiment001.run(settings.data_dir, progress=progress, variants=variants)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     write_json(out / f"experiment-{number}.json", result)
     (out / f"experiment-{number}.md").write_text(experiment001.render(result, number), encoding="utf-8")
     print(out / f"experiment-{number}.md")  # noqa: T201
+    return 0
+
+
+def _telegram_notifier(settings: Settings) -> Callable[[str], None] | None:
+    import os  # noqa: PLC0415
+
+    chat_id = os.environ.get("QUANT_TELEGRAM_CHAT_ID")
+    if settings.telegram_bot_token is None or not chat_id:
+        return None
+    token = settings.telegram_bot_token.get_secret_value()
+
+    def send(text: str) -> None:
+        import httpx  # noqa: PLC0415
+
+        try:
+            httpx.post(
+                f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10
+            )
+        except httpx.HTTPError as exc:
+            log.warning("telegram_failed", error=type(exc).__name__)
+
+    return send
+
+
+def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
+    from quant.news.classifier import anthropic_transport  # noqa: PLC0415
+    from quant.news.monitor import NewsMonitor  # noqa: PLC0415
+    from quant.news.policy import load_state  # noqa: PLC0415
+
+    if args.action == "status":
+        state = load_state(settings.data_dir / "news" / "risk_state.json")
+        print(state.level.name, *state.reasons, sep="\n")  # noqa: T201
+        return 0
+    monitor = NewsMonitor(
+        settings.data_dir, anthropic_transport(args.model, args.effort), notify=_telegram_notifier(settings)
+    )
+    if args.action == "once":
+        res = monitor.run_once()
+        print(f"fetched={res.fetched} new={res.new} classified={res.classified} level={res.state.level.name}")  # noqa: T201
+        for src, err in res.feed_errors.items():
+            print(f"feed error {src}: {err}", file=sys.stderr)  # noqa: T201
+        return 0
+    monitor.watch(args.interval)
     return 0
 
 
@@ -135,10 +183,22 @@ def build_parser() -> argparse.ArgumentParser:
     b.set_defaults(func=cmd_data_bybit)
     research = sub.add_parser("research", help="pre-registered experiments")
     rsub = research.add_subparsers(dest="action", required=True)
-    for number, help_ in (("001", "first scalping hypotheses"), ("002", "intraday hypotheses (15m-4h)")):
+    for number, help_ in (
+        ("001", "first scalping hypotheses"),
+        ("002", "intraday hypotheses (15m-4h)"),
+        ("003", "intraday trend + FOMC blackout"),
+    ):
         e = rsub.add_parser(f"exp{number}", help=f"experiment {number}: {help_}")
         e.add_argument("--out", default="docs/research")
         e.set_defaults(func=cmd_research_exp001, experiment=number)
+    news = sub.add_parser("news", help="news risk monitor (runs on the owner's computer)")
+    nsub = news.add_subparsers(dest="action", required=True)
+    for name, help_ in (("once", "one fetch/classify cycle"), ("watch", "run continuously"), ("status", "print risk")):
+        n = nsub.add_parser(name, help=help_)
+        n.add_argument("--interval", type=float, default=180.0, help="seconds between cycles (watch)")
+        n.add_argument("--model", default="claude-opus-5")
+        n.add_argument("--effort", default="low", choices=["low", "medium", "high"])
+        n.set_defaults(func=cmd_news)
     return parser
 
 

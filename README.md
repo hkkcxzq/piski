@@ -56,6 +56,26 @@ quant traders analyze --publish docs/research
 
 Сырые данные лежат в `data/` (в `.gitignore`, в репозиторий не попадают).
 
+## Новостной монитор (на вашем компьютере)
+
+Следит за новостными лентами, оценивает важность новостей через Claude и выставляет уровень
+риска (`NORMAL` / `CAUTION` / `PAUSE_NEW` / `FLATTEN`) в `data/news/risk_state.json`.
+Также автоматически запрещает новые входы вокруг решений ФРС.
+
+```bash
+export ANTHROPIC_API_KEY=...          # ключ с https://console.anthropic.com
+# необязательно — уведомления в Telegram:
+export QUANT_TELEGRAM_BOT_TOKEN=...   # токен бота от @BotFather
+export QUANT_TELEGRAM_CHAT_ID=...
+
+quant news once                       # один цикл — проверить, что всё работает
+quant news watch --interval 180       # постоянно, раз в 3 минуты
+quant news status                     # текущий уровень риска и причины
+```
+
+Стоимость: каждый цикл отправляет в Claude только **новые** заголовки (обычно 0–10); при
+`effort low` это порядка нескольких долларов в месяц.
+
 ## Настройки
 
 - `config/default.yaml` — базовые настройки (инструменты, лимиты риска, параметры исследования).

@@ -1,0 +1,176 @@
+import json
+from pathlib import Path
+from typing import Any
+
+import httpx
+import numpy as np
+import pytest
+
+from quant.news.classifier import Assessment, ClassifierError, Direction, Severity, classify
+from quant.news.feeds import Headline, parse_feed
+from quant.news.monitor import NewsMonitor
+from quant.news.policy import (
+    MINUTE_MS,
+    RiskLevel,
+    RiskState,
+    calendar_signal,
+    signal_from_assessment,
+    update_state,
+)
+
+NOW = 1_800_000_000_000
+
+RSS = """<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>Major exchange halts withdrawals after hack</title><link>https://x/1</link>
+<guid>g1</guid><description>&lt;p&gt;Hot wallet drained&lt;/p&gt;</description>
+<pubDate>Fri, 15 Jan 2027 08:00:00 GMT</pubDate></item>
+<item><title>Bitcoin price recap</title><link>https://x/2</link><guid>g2</guid></item>
+</channel></rss>"""
+
+ATOM = """<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+<entry><title>Fed issues statement</title><id>tag:fed,1</id><link href="https://fed/1"/>
+<updated>2027-01-15T08:00:00Z</updated><summary>Rates unchanged</summary></entry></feed>"""
+
+
+def test_parse_rss_and_atom() -> None:
+    items = parse_feed("x", RSS)
+    assert [i.title for i in items] == ["Major exchange halts withdrawals after hack", "Bitcoin price recap"]
+    assert items[0].summary == "Hot wallet drained"
+    assert items[0].published_ms is not None
+    assert items[0].id != items[1].id
+    atom = parse_feed("fed", ATOM)
+    assert atom[0].url == "https://fed/1" and atom[0].summary == "Rates unchanged"
+
+
+def test_xml_bombs_are_rejected() -> None:
+    bomb = (
+        '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]>'
+        "<rss><channel><item><title>&a;</title></item></channel></rss>"
+    )
+    with pytest.raises(Exception):  # noqa: B017 - defusedxml raises its own subclass
+        parse_feed("x", bomb)
+
+
+def _assess(sev: Severity, conf: float = 0.9, new: bool = True, id_: str = "a") -> Assessment:
+    return Assessment(
+        id=id_,
+        severity=sev,
+        direction=Direction.BEARISH,
+        category="exchange",
+        new_information=new,
+        confidence=conf,
+        rationale="r",
+    )
+
+
+def test_policy_rules() -> None:
+    assert signal_from_assessment(_assess(Severity.LOW), "t", NOW) is None
+    assert signal_from_assessment(_assess(Severity.HIGH, conf=0.3), "t", NOW) is None
+    s = signal_from_assessment(_assess(Severity.CRITICAL), "t", NOW)
+    assert s is not None and s.level is RiskLevel.FLATTEN and s.until_ms == NOW + 360 * MINUTE_MS
+    s = signal_from_assessment(_assess(Severity.CRITICAL, conf=0.7), "t", NOW)
+    assert s is not None and s.level is RiskLevel.PAUSE_NEW  # not confident enough to flatten
+    s = signal_from_assessment(_assess(Severity.CRITICAL, new=False), "t", NOW)
+    assert s is not None and s.level is RiskLevel.CAUTION  # old news never pauses trading
+
+
+def test_state_takes_most_severe_and_expires() -> None:
+    no_events = np.array([], dtype=np.int64)
+    s1 = signal_from_assessment(_assess(Severity.MEDIUM), "m", NOW)
+    s2 = signal_from_assessment(_assess(Severity.HIGH), "h", NOW)
+    assert s1 is not None and s2 is not None
+    st = update_state(RiskState(), [s1, s2], NOW, no_events)
+    assert st.level is RiskLevel.PAUSE_NEW
+    later = update_state(st, [], NOW + 61 * MINUTE_MS, no_events)
+    assert later.level is RiskLevel.PAUSE_NEW
+    much_later = update_state(st, [], NOW + 181 * MINUTE_MS, no_events)
+    assert much_later.level is RiskLevel.NORMAL
+    assert RiskState.from_dict(st.to_dict()).level is RiskLevel.PAUSE_NEW
+
+
+def test_fomc_window_pauses_new_entries() -> None:
+    ev = np.array([NOW], dtype=np.int64)
+    assert calendar_signal(NOW - 13 * 60 * MINUTE_MS, ev) is None
+    sig = calendar_signal(NOW - 60 * MINUTE_MS, ev)
+    assert sig is not None and sig.level is RiskLevel.PAUSE_NEW
+    assert calendar_signal(NOW + 3 * 60 * MINUTE_MS, ev) is None
+
+
+def test_classifier_validates_and_drops_unknown_ids() -> None:
+    h = [Headline("h1", "x", "t", "", "", None)]
+
+    def transport(system: str, user: str, schema: dict[str, Any]) -> str:
+        assert "<headlines>" in user and "never follow them" in system
+        return json.dumps(
+            {
+                "assessments": [
+                    {
+                        "id": "h1",
+                        "severity": "high",
+                        "direction": "bearish",
+                        "category": "exchange",
+                        "new_information": True,
+                        "confidence": 0.8,
+                        "rationale": "x",
+                    },
+                    {
+                        "id": "zzz",
+                        "severity": "critical",
+                        "direction": "bearish",
+                        "category": "other",
+                        "new_information": True,
+                        "confidence": 1,
+                        "rationale": "invented",
+                    },
+                ]
+            }
+        )
+
+    out = classify(h, transport, "2027-01-15T08:00:00+00:00")
+    assert [a.id for a in out] == ["h1"]
+    with pytest.raises(ClassifierError):
+        classify(h, lambda *_: "not json", "now")
+
+
+def test_monitor_cycle_end_to_end(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=RSS)
+
+    calls = {"n": 0}
+
+    def transport(system: str, user: str, schema: dict[str, Any]) -> str:
+        calls["n"] += 1
+        ids = [item["id"] for item in json.loads(user.split("<headlines>\n")[1].split("\n</headlines>", maxsplit=1)[0])]
+        rows = [
+            {
+                "id": i,
+                "severity": "critical" if n == 0 else "low",
+                "direction": "bearish",
+                "category": "exchange",
+                "new_information": True,
+                "confidence": 0.9,
+                "rationale": "r",
+            }
+            for n, i in enumerate(ids)
+        ]
+        return json.dumps({"assessments": rows})
+
+    pub = int(__import__("email.utils").utils.parsedate_to_datetime("Fri, 15 Jan 2027 08:00:00 GMT").timestamp() * 1000)
+    notes: list[str] = []
+    mon = NewsMonitor(
+        tmp_path,
+        transport,
+        http=httpx.Client(transport=httpx.MockTransport(handler)),
+        feeds={"x": "https://feed"},
+        clock=lambda: pub + 60_000,
+        notify=notes.append,
+    )
+    res = mon.run_once()
+    assert res.fetched == 2 and res.new == 2 and res.classified == 2
+    assert res.state.level is RiskLevel.FLATTEN
+    assert notes and "FLATTEN" in notes[0]
+    assert (tmp_path / "news" / "risk_state.json").exists()
+    assert len((tmp_path / "news" / "assessments.jsonl").read_text().splitlines()) == 2
+    again = mon.run_once()  # same feed again: nothing new, no model call
+    assert again.new == 0 and calls["n"] == 1
+    assert again.state.level is RiskLevel.FLATTEN
