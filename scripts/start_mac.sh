@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Запуск всего на Mac: новостной монитор, запись данных Bybit и торговый движок (демо).
-# Mac не засыпает, пока работает скрипт (caffeinate). Остановка: Ctrl+C.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source .venv/bin/activate
+# venv необязателен: если его нет, используется quant из PATH
+if [ -f .venv/bin/activate ]; then
+  source .venv/bin/activate
+fi
+if ! command -v quant >/dev/null 2>&1; then
+  echo "Команда quant не найдена. Выполните в этой папке:"
+  echo "  python3.12 -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'"
+  exit 1
+fi
 set -a; [ -f .env ] && source .env; set +a
 export QUANT_MODE="${QUANT_MODE:-demo}"
 mkdir -p data/logs
