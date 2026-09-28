@@ -161,6 +161,71 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_live(settings: Settings, args: argparse.Namespace) -> int:
+    from quant.app.config import TradingMode  # noqa: PLC0415
+    from quant.exchanges.bybit.client import DEMO, MAINNET, BybitClient  # noqa: PLC0415
+    from quant.live.engine import LiveEngine  # noqa: PLC0415
+    from quant.live.state import Store  # noqa: PLC0415
+    from quant.live.strategies import STRATEGIES  # noqa: PLC0415
+
+    store = Store(settings.data_dir)
+    if args.action == "status":
+        st = store.load()
+        print(f"halted: {st.halted or 'no'}")  # noqa: T201
+        for sym, t in st.open_trades.items():
+            print(f"{sym}: side={t.side} qty={t.qty} entry={t.entry} stop={t.stop} tp={t.take_profit}")  # noqa: T201
+        return 0
+    if args.action == "kill":
+        store.kill_path.parent.mkdir(parents=True, exist_ok=True)
+        store.kill_path.write_text("kill", encoding="utf-8")
+        print("KILL file created: the running engine will flatten and halt on its next cycle")  # noqa: T201
+        return 0
+    if args.action == "reset":
+        st = store.load()
+        st.halted = ""
+        store.kill_path.unlink(missing_ok=True)
+        store.save(st)
+        print("halt cleared")  # noqa: T201
+        return 0
+    if settings.mode is TradingMode.DEMO:
+        base = DEMO
+    elif settings.mode is TradingMode.LIVE:  # only reachable with live_enabled=true (config guard)
+        base = MAINNET
+    else:
+        print("set QUANT_MODE=demo (live trading is locked)", file=sys.stderr)  # noqa: T201
+        return 2
+    if settings.bybit_api_key is None or settings.bybit_api_secret is None:
+        print("QUANT_BYBIT_API_KEY / QUANT_BYBIT_API_SECRET are not set", file=sys.stderr)  # noqa: T201
+        return 2
+    trade = BybitClient(base, settings.bybit_api_key.get_secret_value(), settings.bybit_api_secret.get_secret_value())
+    market = BybitClient(MAINNET)
+    engine = LiveEngine(
+        trade,
+        market,
+        STRATEGIES[args.strategy],
+        settings.universe.trade,
+        settings.risk,
+        store,
+        settings.data_dir / "news" / "risk_state.json",
+        notify=_telegram_notifier(settings),
+    )
+    if args.action == "once":
+        st = engine.run_cycle()
+        print(f"halted={st.halted or 'no'} open={list(st.open_trades)}")  # noqa: T201
+        return 0
+    engine.run_forever(args.interval)
+    return 0
+
+
+def cmd_record(settings: Settings, args: argparse.Namespace) -> int:
+    import asyncio  # noqa: PLC0415
+
+    from quant.data.recorder import Recorder  # noqa: PLC0415
+
+    asyncio.run(Recorder(settings.data_dir, settings.universe.record).run(args.interval))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant", description="Systematic trading research system")
     parser.add_argument("--config", action="append", type=Path, help="extra YAML config (repeatable)")
@@ -199,6 +264,22 @@ def build_parser() -> argparse.ArgumentParser:
         n.add_argument("--model", default="claude-opus-5")
         n.add_argument("--effort", default="low", choices=["low", "medium", "high"])
         n.set_defaults(func=cmd_news)
+    rec = sub.add_parser("record", help="record liquidations, open interest and funding (owner's computer)")
+    rec.add_argument("--interval", type=float, default=60.0)
+    rec.set_defaults(func=cmd_record)
+    live = sub.add_parser("live", help="demo/live trading engine (runs on the owner's computer)")
+    lsub = live.add_subparsers(dest="action", required=True)
+    for name, help_ in (
+        ("once", "one cycle"),
+        ("run", "run continuously"),
+        ("status", "open trades and halt state"),
+        ("kill", "flatten everything and halt"),
+        ("reset", "clear a halt / kill switch"),
+    ):
+        lp = lsub.add_parser(name, help=help_)
+        lp.add_argument("--strategy", default="brk4h-fomc")
+        lp.add_argument("--interval", type=float, default=60.0)
+        lp.set_defaults(func=cmd_live)
     return parser
 
 

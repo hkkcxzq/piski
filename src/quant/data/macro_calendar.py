@@ -5,7 +5,7 @@ at any moment the next event time was public knowledge.
 
 FOMC: decision/statement at 14:00 America/New_York on the second day of each scheduled
 meeting. Dates 2021–2022 from the Federal Reserve calendar; 2023–2025 verified against
-https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (Sep 2025).
+https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (Sep 2025); 2026 schedule verified Sep 2026.
 CPI / NFP are not included yet: their historical schedule must come from a verified source
 (BLS), which the research environment cannot reach — see docs/research/preregistration-003.md.
 """
@@ -59,6 +59,16 @@ FOMC_DECISION_DAYS: tuple[str, ...] = (
     "2025-06-18",
     "2025-07-30",
     "2025-09-17",
+    "2025-10-29",
+    "2025-12-10",
+    "2026-01-28",
+    "2026-03-18",
+    "2026-04-29",
+    "2026-06-17",
+    "2026-07-29",
+    "2026-09-16",
+    "2026-10-28",
+    "2026-12-09",
 )
 
 
