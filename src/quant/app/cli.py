@@ -347,7 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("reset", "clear a halt / kill switch"),
     ):
         lp = lsub.add_parser(name, help=help_)
-        lp.add_argument("--strategy", default="brk4h-fomc")
+        lp.add_argument("--strategy", default="swing-mom")
         lp.add_argument("--interval", type=float, default=60.0)
         lp.set_defaults(func=cmd_live)
     return parser

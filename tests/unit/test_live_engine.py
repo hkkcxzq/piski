@@ -233,3 +233,18 @@ def test_short_and_long_prices(tmp_path: Path, side: int) -> None:
     stop, tp = float(o["stopLoss"]), float(o["takeProfit"])
     assert (stop < 100 < tp) if side > 0 else (tp < 100 < stop)
     assert np.isclose(abs(100 - stop), 2.0)
+
+
+def test_swing_strategy_signals_on_engine_history() -> None:
+    from quant.live.strategies import STRATEGIES  # noqa: PLC0415
+
+    rng = np.random.default_rng(0)
+    n = 999  # the engine loads 1000 klines, the last one still open
+    px = 100 * np.exp(np.cumsum(rng.normal(0.002, 0.01, n + 1)))  # uptrend with noise
+    rows = [(T0 + i * H4, px[i], px[i] * 1.004, px[i] * 0.996, px[i], 10.0) for i in range(n + 1)]
+    bars = bars_from_klines(rows, 240, T0 + n * H4 + 60_000)
+    swing = STRATEGIES["swing-mom"]
+    sig = swing.build(bars)
+    assert sig.side[-1] == 1  # 28-day return is positive
+    assert np.isfinite(sig.stop_dist[-1]) and sig.stop_dist[-1] > 0.01 * bars.c[-1]  # multi-day stop, not intraday
+    assert sig.max_hold[-1] == 14 * 6  # 14 days of 4h bars
