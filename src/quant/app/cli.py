@@ -138,6 +138,11 @@ def cmd_research_exp001(settings: Settings, args: argparse.Namespace) -> int:
 
         variants = list(grid004(settings.data_dir))
         min_dev, min_val = 60, 30  # preregistration-004: slow 4h signals are rare
+    elif number == "005":
+        from quant.strategies.swing import grid005  # noqa: PLC0415
+
+        variants = list(grid005())
+        min_dev, min_val = 60, 20  # preregistration-005: multi-day holds, few trades
     result = experiment001.run(
         settings.data_dir, progress=progress, variants=variants, min_dev_trades=min_dev, min_val_trades=min_val
     )
@@ -294,6 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("002", "intraday hypotheses (15m-4h)"),
         ("003", "intraday trend + FOMC blackout"),
         ("004", "positioning: funding, open interest, long/short"),
+        ("005", "multi-day momentum (swing)"),
     ):
         e = rsub.add_parser(f"exp{number}", help=f"experiment {number}: {help_}")
         e.add_argument("--out", default="docs/research")

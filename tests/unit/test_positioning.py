@@ -17,6 +17,7 @@ from quant.strategies.positioning import (
     oi_breakout,
     top_vs_crowd,
 )
+from quant.strategies.swing import grid005, swing_tsmom
 
 HOUR = 3_600_000
 
@@ -138,3 +139,16 @@ def test_grid004_has_64_unique_variants(tmp_path: Path) -> None:
         "H-013-FLUSH-FADE",
         "H-014-TOP-VS-CROWD",
     }
+
+
+def test_swing_tsmom_is_causal_and_long_only_has_no_shorts() -> None:
+    n, cut = 3000, 2200
+    b = _bars(n, 3)
+    full = swing_tsmom(b, 7, 7, 2.0, False)
+    b2 = _bars(n, 3)
+    b2.c[cut:] *= np.random.default_rng(1).uniform(0.5, 1.5, n - cut)
+    part = swing_tsmom(b2, 7, 7, 2.0, False)
+    assert np.array_equal(full.side[:cut], part.side[:cut])
+    assert (full.side == 1).any() and (full.side == -1).any()
+    assert not (swing_tsmom(b, 7, 7, 2.0, True).side < 0).any()
+    assert len({v.key for v in grid005()}) == 24
