@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import shutil
 import sys
@@ -113,6 +114,18 @@ def cmd_data_binance(settings: Settings, args: argparse.Namespace) -> int:
         errors=sum(r.status == "error" for r in results),
     )
     return 1 if any(r.status == "error" for r in results) else 0
+
+
+def cmd_research_exp006(settings: Settings, args: argparse.Namespace) -> int:
+    from quant.research import experiment006  # noqa: PLC0415
+    from quant.traders.store import write_json  # noqa: PLC0415
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    result = experiment006.run(settings.data_dir)
+    write_json(out / "experiment-006.json", result)
+    print(json.dumps({k: v for k, v in result.items() if k != "family"}, indent=2, ensure_ascii=False))  # noqa: T201
+    return 0
 
 
 def cmd_research_exp001(settings: Settings, args: argparse.Namespace) -> int:
@@ -304,6 +317,9 @@ def build_parser() -> argparse.ArgumentParser:
         e = rsub.add_parser(f"exp{number}", help=f"experiment {number}: {help_}")
         e.add_argument("--out", default="docs/research")
         e.set_defaults(func=cmd_research_exp001, experiment=number)
+    e6 = rsub.add_parser("exp006", help="experiment 006: open HOLDOUT once for swing momentum")
+    e6.add_argument("--out", default="docs/research")
+    e6.set_defaults(func=cmd_research_exp006)
     news = sub.add_parser("news", help="news risk monitor (runs on the owner's computer)")
     nsub = news.add_subparsers(dest="action", required=True)
     for name, help_ in (("once", "one fetch/classify cycle"), ("watch", "run continuously"), ("status", "print risk")):
