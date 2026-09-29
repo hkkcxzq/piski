@@ -69,6 +69,8 @@ def run(
     costs: Costs = DEFAULT_COSTS,
     progress: Any = None,
     variants: list[Variant] | None = None,
+    min_dev_trades: int = MIN_DEV_TRADES,
+    min_val_trades: int = MIN_VAL_TRADES,
 ) -> dict[str, Any]:
     minutes = {s: load_minutes(root, s, START, END) for s in SYMBOLS}
     frames: dict[tuple[str, int], Bars] = {}
@@ -89,7 +91,7 @@ def run(
                 bars = frames[(s, var.timeframe_min)]
                 sig = signals_cache.get((s, var.key))
                 if sig is None:
-                    sig = signals_cache[(s, var.key)] = var.build(bars)
+                    sig = signals_cache[(s, var.key)] = var.build(bars, s) if var.symbol_aware else var.build(bars)
                 t, summ = run_split(bars, sig, split, costs)
                 res.per_split[split][s] = summ
                 pooled.append(t.net)
@@ -105,14 +107,14 @@ def run(
     decisions: dict[str, dict[str, Any]] = {}
     var_by_key = {v.key: v for v in variants}
     for h, rs in by_h.items():
-        eligible = [r for r in rs if r.pooled_net["dev"].size >= MIN_DEV_TRADES and r.pooled_net["dev"].mean() > 0]
+        eligible = [r for r in rs if r.pooled_net["dev"].size >= min_dev_trades and r.pooled_net["dev"].mean() > 0]
         if not eligible:
             decisions[h] = {"status": "REJECTED", "stage": "dev", "reason": "no variant with positive net on DEV"}
             continue
         best = max(eligible, key=lambda r: t_statistic(r.pooled_net["dev"]) or -1e9)
         val = best.pooled_net["validation"]
         val_ok = (
-            val.size >= MIN_VAL_TRADES
+            val.size >= min_val_trades
             and val.mean() > 0
             and (t_statistic(val) or 0) >= 2.0
             and (profit_factor(val) or 0) >= 1.1

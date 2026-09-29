@@ -93,6 +93,28 @@ def cmd_data_bybit(settings: Settings, args: argparse.Namespace) -> int:
     return 1 if any(r.status == "error" for r in bad) else 0
 
 
+def cmd_data_binance(settings: Settings, args: argparse.Namespace) -> int:
+    from quant.data import binance_derivs  # noqa: PLC0415
+
+    days = date_range(dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end))
+    done = {"n": 0}
+
+    def progress(r: DayResult) -> None:
+        done["n"] += 1
+        if r.status not in ("ok", "exists") or done["n"] % 100 == 0:
+            print(f"[{done['n']}] {r.day} {r.status} {r.detail}", file=sys.stderr, flush=True)  # noqa: T201
+
+    results = binance_derivs.download(settings.data_dir, args.symbol, days, workers=args.workers, progress=progress)
+    log.info(
+        "binance_derivs_done",
+        symbol=args.symbol,
+        fetched=sum(r.status == "ok" for r in results),
+        missing=sum(r.status == "missing" for r in results),
+        errors=sum(r.status == "error" for r in results),
+    )
+    return 1 if any(r.status == "error" for r in results) else 0
+
+
 def cmd_research_exp001(settings: Settings, args: argparse.Namespace) -> int:
     from quant.research import experiment001  # heavy imports (numba) only when needed  # noqa: PLC0415
     from quant.traders.store import write_json  # noqa: PLC0415
@@ -110,7 +132,15 @@ def cmd_research_exp001(settings: Settings, args: argparse.Namespace) -> int:
         from quant.strategies.trend import grid003  # noqa: PLC0415
 
         variants = list(grid003())
-    result = experiment001.run(settings.data_dir, progress=progress, variants=variants)
+    min_dev, min_val = experiment001.MIN_DEV_TRADES, experiment001.MIN_VAL_TRADES
+    if number == "004":
+        from quant.strategies.positioning import grid004  # noqa: PLC0415
+
+        variants = list(grid004(settings.data_dir))
+        min_dev, min_val = 60, 30  # preregistration-004: slow 4h signals are rare
+    result = experiment001.run(
+        settings.data_dir, progress=progress, variants=variants, min_dev_trades=min_dev, min_val_trades=min_val
+    )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     write_json(out / f"experiment-{number}.json", result)
@@ -251,12 +281,19 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--end", required=True, help="YYYY-MM-DD")
     b.add_argument("--workers", type=int, default=4)
     b.set_defaults(func=cmd_data_bybit)
+    bn = dsub.add_parser("binance-derivs", help="download Binance futures OI / long-short / funding history")
+    bn.add_argument("--symbol", default="BTCUSDT")
+    bn.add_argument("--start", required=True, help="YYYY-MM-DD")
+    bn.add_argument("--end", required=True, help="YYYY-MM-DD")
+    bn.add_argument("--workers", type=int, default=8)
+    bn.set_defaults(func=cmd_data_binance)
     research = sub.add_parser("research", help="pre-registered experiments")
     rsub = research.add_subparsers(dest="action", required=True)
     for number, help_ in (
         ("001", "first scalping hypotheses"),
         ("002", "intraday hypotheses (15m-4h)"),
         ("003", "intraday trend + FOMC blackout"),
+        ("004", "positioning: funding, open interest, long/short"),
     ):
         e = rsub.add_parser(f"exp{number}", help=f"experiment {number}: {help_}")
         e.add_argument("--out", default="docs/research")

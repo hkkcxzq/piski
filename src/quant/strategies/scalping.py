@@ -157,7 +157,8 @@ class Variant:
     hypothesis: str
     timeframe_min: int
     params: dict[str, Any]
-    build: Callable[[Bars], Signals]
+    build: Callable[..., Signals]  # (bars) -> Signals, or (bars, symbol) -> Signals if symbol_aware
+    symbol_aware: bool = False
 
     @property
     def key(self) -> str:
