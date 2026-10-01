@@ -270,3 +270,13 @@ def test_swing_strategy_signals_on_engine_history() -> None:
     assert sig.side[-1] == 1  # 28-day return is positive
     assert np.isfinite(sig.stop_dist[-1]) and sig.stop_dist[-1] > 0.01 * bars.c[-1]  # multi-day stop, not intraday
     assert sig.max_hold[-1] == 14 * 6  # 14 days of 4h bars
+
+
+def test_size_and_stop_use_the_live_price(tmp_path: Path) -> None:
+    fake = FakeBybit(klines())
+    fake.ticker_price = Decimal("101")  # price moved up after the bar closed at 100
+    eng, _ = make(tmp_path, fake)
+    eng.run_cycle()
+    (order,) = fake.orders
+    assert order["stopLoss"] == "99.0"  # stop distance 2.0 kept from the live price, not from the close
+    assert order["qty"] == "12.500"  # risk / stop distance is unchanged

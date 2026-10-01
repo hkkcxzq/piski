@@ -324,7 +324,13 @@ class LiveEngine:
         if side == 0:
             return
         inst = self._inst(symbol)
+        # size and stop from the live price, so the risk is the intended fraction even when the entry
+        # happens a while after the bar closed (the stop keeps the backtest's distance from the fill)
         ref = Decimal(str(bars.c[i]))
+        try:
+            ref = Decimal(str(self.market.ticker(symbol)["lastPrice"]))
+        except (BybitError, KeyError, ArithmeticError):
+            self._event("ticker_unavailable_using_bar_close", symbol=symbol)
         stop_dist = Decimal(str(sig.stop_dist[i]))
         qty = position_qty(equity, ref, stop_dist, inst, self.limits, risk_multiplier(level))
         if qty == 0:

@@ -24,6 +24,7 @@ class FakeBybit:
         self.drop_stops = False  # simulate an exchange that ignores SL on order create
         self.reject_trading_stop = False
         self.fail_orders = False
+        self.ticker_price: Decimal | None = None  # live price differing from the last bar close
 
     def last_price(self) -> Decimal:
         return Decimal(self.klines[0][4])
@@ -58,6 +59,10 @@ class FakeBybit:
                             }
                         ]
                     }
+                )
+            if path == "/v5/market/tickers":
+                return self._ok(
+                    {"list": [{"symbol": q["symbol"], "lastPrice": str(self.ticker_price or self.last_price())}]}
                 )
             if path == "/v5/market/kline":
                 return self._ok({"list": self.klines[: int(q.get("limit", 200))]})
