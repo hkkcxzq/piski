@@ -416,3 +416,14 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# --- quant project ---
+.venv/
+.env
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+__pycache__/
+/data/
+config/local.yaml

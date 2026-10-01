@@ -1,0 +1,38 @@
+# Базовая конфигурация. Секреты (API-ключи) сюда НЕ пишутся —
+# только через переменные окружения (см. .env.example).
+# Локальные переопределения: config/local.yaml (в .gitignore).
+
+mode: backtest          # backtest | paper | demo | live (live заблокирован)
+live_enabled: false
+data_dir: data
+log_level: INFO
+log_json: true
+
+universe:
+  trade: [BTCUSDT, ETHUSDT]
+  # SOL и золото — только сбор данных и исследование, без торговли (см. docs/DECISIONS.md)
+  record: [BTCUSDT, ETHUSDT, SOLUSDT, XAUTUSDT, XAUUSDT]
+
+risk:
+  max_position_risk: 0.0025     # 0.25 % equity риска до стопа на сделку
+  max_total_risk: 0.01
+  max_daily_loss: 0.02          # 2 % — дневной kill switch
+  max_weekly_loss: 0.05
+  max_drawdown: 0.10
+  max_leverage: 5
+  max_correlated_exposure: 0.02
+
+hyperliquid:
+  weight_budget_per_minute: 800
+
+trader_research:
+  top_by_all_time: 100
+  top_by_month: 50
+  control_sample: 60
+  min_account_value: 10000
+  min_all_time_volume: 1000000
+  min_trades: 50
+  min_history_days: 30
+  context_coins: [BTC, ETH, SOL]
+  fdr_q: 0.05
+  min_supporting_traders: 3
