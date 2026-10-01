@@ -84,7 +84,8 @@ cp .env.example .env    # впишите QUANT_BYBIT_API_KEY / SECRET (и по �
 ./scripts/start_mac.sh
 ```
 
-**Управление:** `quant live status` — открытые позиции; `quant live kill` — закрыть всё и остановить;
+**Управление:** `quant live status` — открытые позиции; `quant live report` — итоги закрытых сделок и
+сравнение с нормальным диапазоном бэктеста (`docs/research/montecarlo-swing.md`); `quant live kill` — закрыть всё и остановить;
 `quant live reset` — снять остановку (после дневного лимита потерь или kill). Журнал сделок —
 `data/live/trades.jsonl`, события — `data/live/events.jsonl`, логи — `data/logs/`.
 

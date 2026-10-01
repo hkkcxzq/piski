@@ -116,6 +116,19 @@ def cmd_data_binance(settings: Settings, args: argparse.Namespace) -> int:
     return 1 if any(r.status == "error" for r in results) else 0
 
 
+def cmd_research_montecarlo(settings: Settings, args: argparse.Namespace) -> int:
+    from quant.research import montecarlo  # noqa: PLC0415
+    from quant.traders.store import write_json  # noqa: PLC0415
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    res = montecarlo.run(settings.data_dir)
+    write_json(out / "montecarlo-swing.json", res)
+    (out / "montecarlo-swing.md").write_text(montecarlo.render(res), encoding="utf-8")
+    print(out / "montecarlo-swing.md")  # noqa: T201
+    return 0
+
+
 def cmd_research_exp006(settings: Settings, args: argparse.Namespace) -> int:
     from quant.research import experiment006  # noqa: PLC0415
     from quant.traders.store import write_json  # noqa: PLC0415
@@ -228,6 +241,12 @@ def cmd_live(settings: Settings, args: argparse.Namespace) -> int:
         for sym, t in st.open_trades.items():
             print(f"{sym}: side={t.side} qty={t.qty} entry={t.entry} stop={t.stop} tp={t.take_profit}")  # noqa: T201
         return 0
+    if args.action == "report":
+        from quant.live.report import build  # noqa: PLC0415
+
+        mc = Path("docs/research/montecarlo-swing.json")
+        print(build(store.load(), store.journal_path, mc, args.strategy))  # noqa: T201
+        return 0
     if args.action == "kill":
         store.kill_path.parent.mkdir(parents=True, exist_ok=True)
         store.kill_path.write_text("kill", encoding="utf-8")
@@ -321,6 +340,9 @@ def build_parser() -> argparse.ArgumentParser:
     e6 = rsub.add_parser("exp006", help="experiment 006: open HOLDOUT once for swing momentum")
     e6.add_argument("--out", default="docs/research")
     e6.set_defaults(func=cmd_research_exp006)
+    mcp = rsub.add_parser("montecarlo", help="Monte Carlo of the live swing strategy")
+    mcp.add_argument("--out", default="docs/research")
+    mcp.set_defaults(func=cmd_research_montecarlo)
     news = sub.add_parser("news", help="news risk monitor (runs on the owner's computer)")
     nsub = news.add_subparsers(dest="action", required=True)
     for name, help_ in (("once", "one fetch/classify cycle"), ("watch", "run continuously"), ("status", "print risk")):
@@ -344,6 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("once", "one cycle"),
         ("run", "run continuously"),
         ("status", "open trades and halt state"),
+        ("report", "closed trades vs. the backtest's Monte Carlo range"),
         ("kill", "flatten everything and halt"),
         ("reset", "clear a halt / kill switch and re-evaluate the latest bar"),
     ):
