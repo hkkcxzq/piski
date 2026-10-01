@@ -303,6 +303,9 @@ class LiveEngine:
         if symbol in st.open_trades:
             return
         tf = self.strategy.timeframe_min
+        seen = st.last_bar_ms.get(symbol)
+        if seen is not None and now < seen + 2 * tf * 60_000:
+            return  # no new closed bar since the last evaluation: do not hit the market-data API
         try:
             bars = bars_from_klines(self.market.klines(symbol, tf, 1000), tf, now)
         except BybitError as exc:
@@ -360,6 +363,7 @@ class LiveEngine:
             try:
                 if self.trade.position(symbol).size == 0:
                     st.open_trades.pop(symbol, None)  # nothing happened on the exchange
+                    st.last_bar_ms.pop(symbol, None)  # re-evaluate this bar next cycle instead of losing the signal
                     return
             except BybitError:
                 return  # unknown: the next cycle reconciles

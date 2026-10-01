@@ -222,6 +222,28 @@ def test_rejected_order_leaves_no_phantom_trade(tmp_path: Path) -> None:
     eng, _ = make(tmp_path, fake)
     st = eng.run_cycle()
     assert not st.open_trades
+    # the signal is not lost: once the exchange accepts orders again, the same bar is retried
+    fake.fail_orders = False
+    st = eng.run_cycle()
+    assert "BTCUSDT" in st.open_trades and len(fake.orders) == 1
+
+
+def test_no_market_data_request_until_a_new_bar_closes(tmp_path: Path) -> None:
+    fake = FakeBybit(klines())
+    clock = [NOW]
+    calls: list[str] = []
+    inner = fake.handler
+
+    def counting(req):  # type: ignore[no-untyped-def]
+        calls.append(req.url.path)
+        return inner(req)
+
+    fake.handler = counting  # type: ignore[method-assign]
+    eng, _ = make(tmp_path, fake, side=0, clock=clock)
+    eng.run_cycle()
+    clock[0] += 60_000  # one minute later, same bar
+    eng.run_cycle()
+    assert calls.count("/v5/market/kline") == 1
 
 
 @pytest.mark.parametrize("side", [1, -1])
