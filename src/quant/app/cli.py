@@ -236,9 +236,10 @@ def cmd_live(settings: Settings, args: argparse.Namespace) -> int:
     if args.action == "reset":
         st = store.load()
         st.halted = ""
+        st.last_bar_ms.clear()  # re-evaluate the latest closed bar (e.g. after fixing API key permissions)
         store.kill_path.unlink(missing_ok=True)
         store.save(st)
-        print("halt cleared")  # noqa: T201
+        print("halt cleared; the latest closed bar will be re-evaluated")  # noqa: T201
         return 0
     if settings.mode is TradingMode.DEMO:
         base = DEMO
@@ -344,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("run", "run continuously"),
         ("status", "open trades and halt state"),
         ("kill", "flatten everything and halt"),
-        ("reset", "clear a halt / kill switch"),
+        ("reset", "clear a halt / kill switch and re-evaluate the latest bar"),
     ):
         lp = lsub.add_parser(name, help=help_)
         lp.add_argument("--strategy", default="swing-mom")
