@@ -17,7 +17,21 @@ from quant.news.classifier import Assessment, Direction, Severity
 from quant.news.feeds import Headline
 
 _F = re.IGNORECASE
-_AMOUNT = r"\$\s?\d[\d.,]*\s?(k|m|mn|million|b|bn|billion)\b"
+_AMOUNT_RE = re.compile(r"\$\s?(\d[\d.,]*)\s?(k|m|mn|million|b|bn|billion)\b", _F)
+_SCALE = {"k": 1e3, "m": 1e6, "mn": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9}
+# a hack has to be this large to matter for BTC/ETH; smaller ones are logged only
+MIN_HACK_USD = 100e6
+
+
+def largest_amount_usd(title: str) -> float:
+    """Largest ``$<number><k|m|b>`` amount in the title (0 if none)."""
+    best = 0.0
+    for num, unit in _AMOUNT_RE.findall(title):
+        try:
+            best = max(best, float(num.replace(",", "")) * _SCALE[unit.lower()])
+        except ValueError:
+            continue
+    return best
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +41,7 @@ class Rule:
     category: str
     patterns: tuple[re.Pattern[str], ...]  # all must match the title
     source: str | None = None  # restrict to one feed
+    min_usd: float = 0.0  # the title must mention at least this amount
 
 
 def _r(*patterns: str) -> tuple[re.Pattern[str], ...]:
@@ -35,14 +50,15 @@ def _r(*patterns: str) -> tuple[re.Pattern[str], ...]:
 
 RULES: tuple[Rule, ...] = (
     Rule(
-        "hack with a large amount",
+        "hack of $100M+",
         Severity.HIGH,
         "hack_exploit",
-        _r(r"\b(hack(ed|s)?|exploit(ed|s)?|drained|stolen|breach(ed)?)\b", _AMOUNT),
+        _r(r"\b(hack(ed|s)?|exploit(ed|s)?|drained|stolen|breach(ed)?)\b"),
+        min_usd=MIN_HACK_USD,
     ),
     Rule(
         "exchange hacked",
-        Severity.HIGH,
+        Severity.MEDIUM,
         "hack_exploit",
         _r(r"\bexchange\b.{0,60}\bhack(ed|s)?\b|\bhack(ed|s)?\b.{0,60}\bexchange\b"),
     ),
@@ -88,6 +104,13 @@ RULES: tuple[Rule, ...] = (
     ),
 )
 EXCLUDE = re.compile(r"\b(hackathon|ethical hack\w*|bug bount\w*|white ?hat)\b", _F)
+# summaries, follow-ups and aftermath of an incident that is already known: not new information
+RETROSPECTIVE = re.compile(
+    r"\b(q[1-4]|quarter\w*|year\w*|month\w*|weekly|losses|recap|report\w*|so far|this year|"
+    r"compensat\w*|refund\w*|reimburs\w*|recover\w*|returns?|days after|weeks after|"
+    r"arrest\w*|charged|indict\w*|sanction\w*|lessons|how|why|what)\b",
+    _F,
+)
 CONFIDENCE = {Severity.HIGH: 0.7, Severity.MEDIUM: 0.65}
 
 
@@ -95,8 +118,13 @@ def match(h: Headline) -> Rule | None:
     """The most severe rule matching the headline title, or None."""
     if EXCLUDE.search(h.title):
         return None
+    retrospective = RETROSPECTIVE.search(h.title) is not None
     for rule in sorted(RULES, key=lambda r: r.severity is not Severity.HIGH):
         if rule.source is not None and rule.source != h.source:
+            continue
+        if rule.category in ("hack_exploit", "exchange", "stablecoin") and retrospective:
+            continue
+        if rule.min_usd and largest_amount_usd(h.title) < rule.min_usd:
             continue
         if all(p.search(h.title) for p in rule.patterns):
             return rule

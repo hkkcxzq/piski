@@ -224,8 +224,16 @@ def _h(title: str, source: str = "x") -> Headline:
     ("title", "source", "severity"),
     [
         ("Exchange XYZ hacked, $230 million drained from hot wallet", "x", Severity.HIGH),
-        ("DeFi protocol exploited for $12M", "x", Severity.HIGH),
+        ("DeFi protocol exploited for $120M", "x", Severity.HIGH),
+        ("DeFi protocol exploited for $12M", "x", Severity.NONE),  # too small to move BTC/ETH
+        ("Exchange XYZ hacked", "x", Severity.MEDIUM),  # no amount: caution only
+        # real headlines that paused the demo bot for days (2026-09-30)
+        ("Bitget\u2019s $388M hack pushes Q3 crypto security losses past $1B", "x", Severity.NONE),
+        ("NEAR Intents halts services after $3.8 million exploit, promises full compensation", "x", Severity.NONE),
+        ("Near Intents Hacked for $3.8M Days After Denying North Korea-Linked Bitget Hacker", "x", Severity.NONE),
+        ("NEAR Intents suffers $3.8M exploit after assistance with Bitget breach", "x", Severity.NONE),
         ("Major exchange halts withdrawals amid liquidity concerns", "x", Severity.HIGH),
+        ("Bitget halts withdrawals after $1.2 billion hack", "x", Severity.HIGH),
         ("USDC loses its peg after bank failure", "x", Severity.HIGH),
         ("Fed announces emergency rate cut", "x", Severity.HIGH),
         ("SEC sues crypto exchange over unregistered securities", "x", Severity.MEDIUM),
