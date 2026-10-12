@@ -156,3 +156,32 @@ def llm_classifier(transport: Transport) -> Classifier:
         return classify(headlines, transport, now_iso)
 
     return run
+
+
+_ORDER = list(Severity)
+
+
+def capped(classifier: Classifier, max_severity: Severity) -> Classifier:
+    """Limit the severity a less reliable classifier may assign (e.g. a small local model never
+    triggers FLATTEN on its own)."""
+
+    def run(headlines: Sequence[Headline], now_iso: str) -> list[Assessment]:
+        out = classifier(headlines, now_iso)
+        limit = _ORDER.index(max_severity)
+        return [
+            a if _ORDER.index(a.severity) <= limit else a.model_copy(update={"severity": max_severity}) for a in out
+        ]
+
+    return run
+
+
+def with_fallback(primary: Classifier, fallback: Classifier) -> Classifier:
+    """Use ``fallback`` for a batch when ``primary`` fails, so protection never lapses."""
+
+    def run(headlines: Sequence[Headline], now_iso: str) -> list[Assessment]:
+        try:
+            return primary(headlines, now_iso)
+        except ClassifierError:
+            return fallback(headlines, now_iso)
+
+    return run

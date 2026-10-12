@@ -49,8 +49,10 @@ class NewsMonitor:
         feeds: dict[str, str] | None = None,
         clock: Callable[[], int] | None = None,
         notify: Callable[[str], None] | None = None,
+        batch: int = BATCH,
     ) -> None:
         self.dir = data_dir / "news"
+        self.batch = batch
         self.classifier = classifier
         self.http = http or httpx.Client(timeout=20.0, follow_redirects=True)
         self.feeds = feeds or DEFAULT_FEEDS
@@ -92,8 +94,8 @@ class NewsMonitor:
         now_iso = dt.datetime.fromtimestamp(now / 1000, tz=dt.UTC).isoformat(timespec="seconds")
         by_id = {h.id: h for h in fresh}
         classified_ids: set[str] = set()
-        for i in range(0, len(fresh), BATCH):
-            chunk = fresh[i : i + BATCH]
+        for i in range(0, len(fresh), self.batch):
+            chunk = fresh[i : i + self.batch]
             try:
                 assessments = self.classifier(chunk, now_iso)
             except ClassifierError as exc:

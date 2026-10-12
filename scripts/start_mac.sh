@@ -18,9 +18,11 @@ caffeinate -ims &  # не даём Mac уснуть, экран при этом 
 quant record >> data/logs/record.log 2>&1 &
 quant news watch --interval 180 >> data/logs/news.log 2>&1 &
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-  echo "Новости: оценивает Claude"
+  echo "Новости: оценивает Claude (платно)"
+elif curl -s --max-time 2 http://localhost:11434/api/tags | grep -q '"qwen3:8b"'; then
+  echo "Новости: оценивает локальная модель qwen3:8b через Ollama (бесплатно)"
 else
-  echo "Новости: бесплатные правила по ключевым словам (ANTHROPIC_API_KEY не задан)"
+  echo "Новости: бесплатные правила по ключевым словам (нет ключа Claude и не запущена Ollama)"
 fi
 echo "Движок запущен (режим: $QUANT_MODE). Логи: data/logs/. Статус: quant live status. Аварийно: quant live kill"
 quant live run --interval 60 2>&1 | tee -a data/logs/live.log

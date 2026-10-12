@@ -202,8 +202,16 @@ def _telegram_notifier(settings: Settings) -> Callable[[str], None] | None:
 
 
 def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
-    from quant.news.classifier import Classifier, anthropic_transport, llm_classifier  # noqa: PLC0415
+    from quant.news.classifier import (  # noqa: PLC0415
+        Classifier,
+        Severity,
+        anthropic_transport,
+        capped,
+        llm_classifier,
+        with_fallback,
+    )
     from quant.news.keywords import keyword_classify  # noqa: PLC0415
+    from quant.news.local_llm import ollama_available, ollama_transport  # noqa: PLC0415
     from quant.news.monitor import NewsMonitor  # noqa: PLC0415
     from quant.news.policy import load_state  # noqa: PLC0415
 
@@ -211,12 +219,30 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
         state = load_state(settings.data_dir / "news" / "risk_state.json")
         print(state.level.name, *state.reasons, sep="\n")  # noqa: T201
         return 0
-    use_claude = args.classifier == "claude" or (args.classifier == "auto" and os.environ.get("ANTHROPIC_API_KEY"))
-    classifier: Classifier = (
-        llm_classifier(anthropic_transport(args.model, args.effort)) if use_claude else keyword_classify
-    )
-    print(f"news classifier: {'claude' if use_claude else 'keywords (free)'}", file=sys.stderr)  # noqa: T201
-    monitor = NewsMonitor(settings.data_dir, classifier, notify=_telegram_notifier(settings))
+    kind = args.classifier
+    if kind == "auto":
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            kind = "claude"
+        elif ollama_available(args.local_model):
+            kind = "local"
+        else:
+            kind = "keywords"
+    classifier: Classifier
+    batch = 25
+    if kind == "claude":
+        classifier = with_fallback(llm_classifier(anthropic_transport(args.model, args.effort)), keyword_classify)
+        label = f"claude ({args.model})"
+    elif kind == "local":
+        # a small local model may not close positions on its own (no FLATTEN); keyword rules back it up
+        local = capped(llm_classifier(ollama_transport(args.local_model)), Severity.HIGH)
+        classifier = with_fallback(local, keyword_classify)
+        batch = 8
+        label = f"local model via Ollama ({args.local_model}, free)"
+    else:
+        classifier = keyword_classify
+        label = "keywords (free)"
+    print(f"news classifier: {label}", file=sys.stderr)  # noqa: T201
+    monitor = NewsMonitor(settings.data_dir, classifier, notify=_telegram_notifier(settings), batch=batch)
     if args.action == "once":
         res = monitor.run_once()
         print(f"fetched={res.fetched} new={res.new} classified={res.classified} level={res.state.level.name}")  # noqa: T201
@@ -353,9 +379,10 @@ def build_parser() -> argparse.ArgumentParser:
         n.add_argument(
             "--classifier",
             default="auto",
-            choices=["auto", "claude", "keywords"],
-            help="auto: Claude if ANTHROPIC_API_KEY is set, otherwise free keyword rules",
+            choices=["auto", "claude", "local", "keywords"],
+            help="auto: Claude if ANTHROPIC_API_KEY is set, else a local Ollama model if running, else keyword rules",
         )
+        n.add_argument("--local-model", default="qwen3:8b", help="Ollama model for --classifier local")
         n.set_defaults(func=cmd_news)
     rec = sub.add_parser("record", help="record liquidations, open interest and funding (owner's computer)")
     rec.add_argument("--interval", type=float, default=60.0)

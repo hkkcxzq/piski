@@ -259,3 +259,56 @@ def test_keyword_high_pauses_but_never_flattens() -> None:
     [b] = keyword_classify([_h("SEC sues exchange")], "")
     sig_b = signal_from_assessment(b, "t", NOW)
     assert sig_b is not None and sig_b.level is RiskLevel.CAUTION
+
+
+def _ollama(handler) -> httpx.Client:  # type: ignore[no-untyped-def]
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_ollama_transport_sends_schema_and_returns_content() -> None:
+    from quant.news.local_llm import ollama_transport  # noqa: PLC0415
+
+    seen: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(req.content))
+        h = json.loads(seen["messages"][1]["content"].split("<headlines>\n")[1].split("\n</headlines>")[0])
+        rows = [
+            {
+                "id": x["id"],
+                "severity": "critical",
+                "direction": "bearish",
+                "category": "exchange",
+                "new_information": True,
+                "confidence": 0.9,
+                "rationale": "r",
+            }
+            for x in h
+        ]
+        return httpx.Response(200, json={"message": {"content": json.dumps({"assessments": rows})}})
+
+    from quant.news.classifier import capped  # noqa: PLC0415
+
+    clf = capped(llm_classifier(ollama_transport("m", http=_ollama(handler))), Severity.HIGH)
+    [a] = clf([_h("Exchange halts withdrawals")], "now")
+    assert seen["model"] == "m" and seen["format"]["required"] == ["assessments"] and seen["stream"] is False
+    assert a.severity is Severity.HIGH  # critical capped: a local model cannot trigger FLATTEN
+
+
+def test_local_model_failure_falls_back_to_keywords() -> None:
+    from quant.news.classifier import with_fallback  # noqa: PLC0415
+    from quant.news.local_llm import ollama_transport  # noqa: PLC0415
+
+    down = _ollama(lambda req: httpx.Response(500))
+    clf = with_fallback(llm_classifier(ollama_transport("m", http=down)), keyword_classify)
+    [a] = clf([_h("USDC loses its peg after bank failure")], "now")
+    assert a.severity is Severity.HIGH and "keyword" in a.rationale
+
+
+def test_ollama_available() -> None:
+    from quant.news.local_llm import ollama_available  # noqa: PLC0415
+
+    ok = _ollama(lambda req: httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]}))
+    assert ollama_available("qwen3:8b", http=ok)
+    assert not ollama_available("gemma3:4b", http=ok)
+    assert not ollama_available("qwen3:8b", http=_ollama(lambda req: httpx.Response(404)))
