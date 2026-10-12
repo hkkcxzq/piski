@@ -16,11 +16,12 @@ mkdir -p data/logs
 trap 'kill 0' EXIT
 caffeinate -ims &  # не даём Mac уснуть, экран при этом может гаснуть
 quant record >> data/logs/record.log 2>&1 &
-quant news watch --interval 180 >> data/logs/news.log 2>&1 &
+LOCAL_MODEL="${QUANT_LOCAL_MODEL:-qwen3:8b}"  # для Mac с 8 ГБ памяти: QUANT_LOCAL_MODEL=qwen3:4b в .env
+quant news watch --interval 180 --local-model "$LOCAL_MODEL" >> data/logs/news.log 2>&1 &
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   echo "Новости: оценивает Claude (платно)"
-elif curl -s --max-time 2 http://localhost:11434/api/tags | grep -q '"qwen3:8b"'; then
-  echo "Новости: оценивает локальная модель qwen3:8b через Ollama (бесплатно)"
+elif curl -s --max-time 2 http://localhost:11434/api/tags | grep -q "\"$LOCAL_MODEL\""; then
+  echo "Новости: оценивает локальная модель $LOCAL_MODEL через Ollama (бесплатно)"
 else
   echo "Новости: бесплатные правила по ключевым словам (нет ключа Claude и не запущена Ollama)"
 fi
