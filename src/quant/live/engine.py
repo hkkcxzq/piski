@@ -26,13 +26,15 @@ from quant.backtest.engine import Signals
 from quant.data.bars import Bars
 from quant.exchanges.bybit.client import BybitClient, BybitError, Instrument, Position
 from quant.live.risk import check_losses, effective_risk_level, period_keys, position_qty, risk_multiplier
-from quant.live.state import LiveState, OpenTrade, Store
+from quant.live.state import LiveState, OpenTrade, Store, missing_pnl
 from quant.news.policy import RiskLevel
 from quant.strategies.scalping import atr
 
 log = get_logger(__name__)
 
 STOP_CONFIRM_ATTEMPTS = 3
+PNL_LOOKBACK_MS = 6 * 86_400_000  # Bybit closed-PnL queries span at most 7 days
+BACKFILL_MAX_AGE_MS = 30 * 86_400_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,20 +120,42 @@ class LiveEngine:
         if rec is not None:
             self._finish(st, rec, reason)
 
+    def _fetch_pnl(self, symbol: str, opened_ms: int, start_ms: int, end_ms: int) -> tuple[str, str] | None:
+        """Sum of the exchange's closed-PnL records of one trade (fees and funding included)."""
+        rows = [
+            r
+            for r in self.trade.closed_pnl(symbol, start_ms, end_ms)
+            if int(r.get("createdTime", r.get("updatedTime", 0)) or 0) >= opened_ms
+        ]
+        if not rows:
+            return None
+        return str(sum(Decimal(str(r.get("closedPnl", "0"))) for r in rows)), str(rows[0].get("avgExitPrice"))
+
     def _finish(self, st: LiveState, rec: OpenTrade, reason: str) -> None:
         pnl = None
         exit_px = None
-        try:
-            rows = [
-                r
-                for r in self.trade.closed_pnl(rec.symbol, rec.opened_ms)
-                if int(r.get("createdTime", r.get("updatedTime", 0)) or 0) >= rec.opened_ms
-            ]
-            if rows:
-                pnl = str(sum(Decimal(str(r.get("closedPnl", "0"))) for r in rows))
-                exit_px = str(rows[0].get("avgExitPrice"))
-        except BybitError as exc:
-            self._event("closed_pnl_unavailable", symbol=rec.symbol, error=str(exc))
+        now = self.clock()
+        # Bybit's closed-PnL window is at most 7 days: ask around the close, not from the entry
+        start = max(rec.opened_ms, now - PNL_LOOKBACK_MS)
+        for attempt in range(3):  # the record can appear a few seconds after the close
+            try:
+                got = self._fetch_pnl(rec.symbol, rec.opened_ms, start, now + 60_000)
+            except BybitError as exc:
+                self._event("closed_pnl_unavailable", symbol=rec.symbol, error=str(exc))
+                break
+            if got is not None:
+                pnl, exit_px = got
+                break
+            if attempt < 2:
+                self.sleep(2)
+        if pnl is None:
+            st.pending_pnl.append(
+                {"signal_id": rec.signal_id, "symbol": rec.symbol, "opened_ms": rec.opened_ms, "closed_ms": now}
+            )
+        # like the backtest: after an exit, the next entry is decided on the close of the bar in which
+        # the exit happened — not on the signal of a bar that closed before the exit
+        step = self.strategy.timeframe_min * 60_000
+        st.last_bar_ms[rec.symbol] = (now // step) * step - step
         self.store.journal(
             {
                 "ts": self.clock(),
@@ -165,6 +189,41 @@ class LiveEngine:
             if pos.size != 0 or symbol in st.open_trades:
                 self._close(st, symbol, reason)
 
+    def _backfill_pnl(self, st: LiveState, now: int) -> None:
+        """Fill in the PnL of closed trades the exchange had not reported at close time."""
+        if not st.journal_scanned:
+            st.journal_scanned = True
+            st.pending_pnl.extend(missing_pnl(self.store.journal_path, now - BACKFILL_MAX_AGE_MS, st.pending_pnl))
+        keep = []
+        for p in st.pending_pnl:
+            if now - int(p["closed_ms"]) > BACKFILL_MAX_AGE_MS:
+                self._event("pnl_backfill_gave_up", symbol=p["symbol"], signal_id=p["signal_id"])
+                continue
+            try:
+                got = self._fetch_pnl(
+                    p["symbol"],
+                    int(p["opened_ms"]),
+                    int(p["closed_ms"]) - 2 * 3_600_000,
+                    int(p["closed_ms"]) + 6 * 3_600_000,
+                )
+            except BybitError:
+                keep.append(p)
+                continue
+            if got is None:
+                keep.append(p)
+                continue
+            self.store.journal(
+                {
+                    "ts": now,
+                    "type": "pnl_update",
+                    "signal_id": p["signal_id"],
+                    "symbol": p["symbol"],
+                    "pnl": got[0],
+                    "exit": got[1],
+                }
+            )
+        st.pending_pnl = keep
+
     # ------------------------------------------------------------------ cycle
     def run_cycle(self) -> LiveState:
         now = self.clock()
@@ -178,6 +237,7 @@ class LiveEngine:
                 return st
             equity = self.trade.equity()
             self._update_baselines(st, equity, now)
+            self._backfill_pnl(st, now)
             if not st.halted:
                 loss = check_losses(
                     equity,

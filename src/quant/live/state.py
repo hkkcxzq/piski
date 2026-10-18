@@ -39,6 +39,9 @@ class LiveState:
     peak_equity: str = "0"
     halted: str = ""  # non-empty = trading halted until manual reset
     seq: int = 0
+    # closed trades whose exchange PnL was not available yet: {signal_id, symbol, opened_ms, closed_ms}
+    pending_pnl: list[dict[str, Any]] = field(default_factory=list)
+    journal_scanned: bool = False
 
     def next_id(self, prefix: str) -> str:
         self.seq += 1
@@ -92,3 +95,23 @@ class Store:
 
     def event(self, row: dict[str, Any]) -> None:
         self._append(self.events_path, row)
+
+
+def missing_pnl(journal: Path, since_ms: int, already: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Closed trades in the journal (closed after ``since_ms``) whose PnL is still unknown."""
+    if not journal.exists():
+        return []
+    closes: dict[str, dict[str, Any]] = {}
+    updated: set[str] = set()
+    for line in journal.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        if row.get("type") == "pnl_update":
+            updated.add(str(row.get("signal_id")))
+        elif row.get("type") == "close" and row.get("pnl") in (None, "", "None") and int(row.get("ts", 0)) >= since_ms:
+            closes[str(row.get("signal_id"))] = row
+    pending = {str(p["signal_id"]) for p in already}
+    return [
+        {"signal_id": sid, "symbol": r["symbol"], "opened_ms": int(r["opened_ms"]), "closed_ms": int(r["ts"])}
+        for sid, r in closes.items()
+        if sid not in updated and sid not in pending
+    ]

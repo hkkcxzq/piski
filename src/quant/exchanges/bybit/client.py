@@ -192,10 +192,13 @@ class BybitClient:
             )
         return Position(symbol, Decimal(0), Decimal(0), None, None)
 
-    def closed_pnl(self, symbol: str, start_ms: int) -> list[dict[str, Any]]:
-        r = self.get(
-            "/v5/position/closed-pnl", {"category": CATEGORY, "symbol": symbol, "startTime": start_ms}, auth=True
-        )
+    def closed_pnl(self, symbol: str, start_ms: int, end_ms: int | None = None) -> list[dict[str, Any]]:
+        """Closed-PnL records in [start, end]. Bybit allows a window of at most 7 days and, when only
+        ``startTime`` is given, silently uses ``startTime + 7 days`` as the end."""
+        q: dict[str, Any] = {"category": CATEGORY, "symbol": symbol, "startTime": start_ms}
+        if end_ms is not None:
+            q["endTime"] = end_ms
+        r = self.get("/v5/position/closed-pnl", q, auth=True)
         return list(r.get("list", []))
 
     # ------------------------------------------------------------------ trading

@@ -149,7 +149,13 @@ def test_time_exit(tmp_path: Path) -> None:
     eng.run_cycle()
     clock[0] += 6 * H4 + 1
     eng.run_cycle()
-    assert [o["reduceOnly"] for o in fake.orders] == [False, True, False]  # time exit, then a fresh signal
+    assert [o["reduceOnly"] for o in fake.orders] == [False, True]  # time exit; the next entry waits for a bar close
+    # bars up to the one containing the exit have closed → a fresh signal is evaluated
+    for i in range(N_BARS + 1, N_BARS + 9):
+        fake.klines.insert(0, [str(T0 + i * H4), "100", "101", "99", "100", "10", "1000"])
+    clock[0] = T0 + (N_BARS + 8) * H4 + 60_000
+    eng.run_cycle()
+    assert [o["reduceOnly"] for o in fake.orders] == [False, True, False]
     rows = [json.loads(x) for x in store.journal_path.read_text().splitlines()]
     assert [r["type"] for r in rows] == ["open", "close", "open"] and rows[1]["reason_for_exit"] == "time exit"
 
@@ -280,3 +286,48 @@ def test_size_and_stop_use_the_live_price(tmp_path: Path) -> None:
     (order,) = fake.orders
     assert order["stopLoss"] == "99.0"  # stop distance 2.0 kept from the live price, not from the close
     assert order["qty"] == "12.500"  # risk / stop distance is unchanged
+
+
+def test_after_an_exit_the_next_entry_waits_for_the_bar_close(tmp_path: Path) -> None:
+    fake = FakeBybit(klines())
+    clock = [NOW]
+    eng, _ = make(tmp_path, fake, clock=clock)
+    eng.run_cycle()
+    assert len(fake.orders) == 1
+    clock[0] += 2 * 3_600_000  # two hours later the exchange stop triggers (inside the open bar)
+    fake.stop_out("BTCUSDT")
+    st = eng.run_cycle()
+    assert "BTCUSDT" not in st.open_trades and len(fake.orders) == 1  # no re-entry on a stale signal
+    fake.klines.insert(0, [str(T0 + (N_BARS + 1) * H4), "100", "101", "99", "100", "10", "1000"])
+    clock[0] = T0 + (N_BARS + 2) * H4 + 60_000  # the bar containing the exit has closed
+    st = eng.run_cycle()
+    assert "BTCUSDT" in st.open_trades and len(fake.orders) == 2
+
+
+def test_missing_pnl_is_backfilled_later(tmp_path: Path) -> None:
+    from quant.live.state import missing_pnl  # noqa: PLC0415
+
+    fake = FakeBybit(klines())
+    clock = [NOW]
+    eng, store = make(tmp_path, fake, clock=clock)
+    eng.run_cycle()
+    clock[0] += 3_600_000
+    fake.positions.pop("BTCUSDT")  # closed on the exchange, but no closed-PnL record yet
+    st = eng.run_cycle()
+    assert st.pending_pnl and st.pending_pnl[0]["symbol"] == "BTCUSDT"
+    close = [json.loads(x) for x in store.journal_path.read_text().splitlines()][-1]
+    assert close["type"] == "close" and close["pnl"] is None
+    assert missing_pnl(store.journal_path, 0, []) and not missing_pnl(store.journal_path, 0, st.pending_pnl)
+    fake.closed.append({"symbol": "BTCUSDT", "closedPnl": "-24.5", "avgExitPrice": "98", "createdTime": str(10**15)})
+    clock[0] += 60_000
+    st = eng.run_cycle()
+    assert not st.pending_pnl
+    upd = [json.loads(x) for x in store.journal_path.read_text().splitlines()][-1]
+    assert upd == {
+        "ts": clock[0],
+        "type": "pnl_update",
+        "signal_id": close["signal_id"],
+        "symbol": "BTCUSDT",
+        "pnl": "-24.5",
+        "exit": "98",
+    }

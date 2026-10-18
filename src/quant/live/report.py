@@ -10,6 +10,9 @@ from typing import Any
 
 from quant.live.state import LiveState
 
+# below this, the 5 % band is just "all trades were stops (plus fees)" and flags ordinary bad luck
+MIN_TRADES_FOR_VERDICT = 10
+
 
 def _dec(x: Any) -> Decimal | None:
     try:
@@ -23,10 +26,16 @@ def closed_trades(journal: Path, strategy_id: str | None = None) -> list[dict[st
     if not journal.exists():
         return []
     out = []
-    for line in journal.read_text(encoding="utf-8").splitlines():
-        row = json.loads(line)
-        if row.get("type") != "close" or (strategy_id and row.get("strategy_id") != strategy_id):
+    lines = [json.loads(x) for x in journal.read_text(encoding="utf-8").splitlines()]
+    # PnL reported by the exchange after the close (filled in by the engine later)
+    updates = {str(r.get("signal_id")): r for r in lines if r.get("type") == "pnl_update"}
+    for raw in lines:
+        if raw.get("type") != "close" or (strategy_id and raw.get("strategy_id") != strategy_id):
             continue
+        row = raw
+        upd = updates.get(str(raw.get("signal_id")))
+        if upd is not None and raw.get("pnl") in (None, "", "None"):
+            row = {**raw, "pnl": upd.get("pnl"), "exit": upd.get("exit")}
         entry, stop, qty = _dec(row.get("entry")), _dec(row.get("stop")), _dec(row.get("quantity"))
         pnl = _dec(row.get("pnl"))
         exit_px = _dec(row.get("exit"))
@@ -66,10 +75,14 @@ def build(state: LiveState, journal: Path, mc_path: Path, strategy_id: str) -> s
     wins = sum(1 for t in trades if (t["pnl_usdt"] or 0) > 0)
     lines.append(f"Закрыто сделок: {len(trades)}, в плюсе: {wins} ({wins / len(trades):.0%}), итог {pnl:+,.2f} USDT.")
     for tr in trades[-5:]:
-        r = "?" if tr["r"] is None else f"{tr['r']:+.2f} R"
+        side = "LONG" if int(tr.get("side", 0)) > 0 else "SHORT"
+        if tr["pnl_usdt"] is None:
+            result = "результат ещё не получен с биржи (бот дозапросит)"
+        else:
+            r = "?" if tr["r"] is None else f"{tr['r']:+.2f} R"
+            result = f"{tr['pnl_usdt']:+,.2f} USDT ({r})"
         lines.append(
-            f"  {_fmt_ts(tr.get('ts'))} {tr.get('symbol')} {'LONG' if int(tr.get('side', 0)) > 0 else 'SHORT'}: "
-            f"{(tr['pnl_usdt'] or 0):+,.2f} USDT ({r}), выход: {tr.get('reason_for_exit')}"
+            f"  {_fmt_ts(tr.get('ts'))} {tr.get('symbol')} {side}: {result}, выход: {tr.get('reason_for_exit')}"
         )
     if not rs:
         return "\n".join(lines)
@@ -92,7 +105,16 @@ def build(state: LiveState, journal: Path, mc_path: Path, strategy_id: str) -> s
             f"(5–95 % симуляций); средняя сделка в истории {mc['history']['mean_r']:+.2f} R."
         )
         bad_streak = max(x["losing_streak"]["p95"] for x in mc["horizons"].values())
-        if total_r < lo or streak > bad_streak:
+        if streak > bad_streak:
+            lines.append(
+                "⚠️  Серия убытков длиннее нормальной — нужно разобраться (рынок изменился или ошибка исполнения)."
+            )
+        elif len(rs) < MIN_TRADES_FOR_VERDICT:
+            lines.append(
+                f"Сделок слишком мало для вывода (нужно хотя бы {MIN_TRADES_FOR_VERDICT}): пара стопов подряд у этой "
+                "стратегии — обычное дело."
+            )
+        elif total_r < lo:
             lines.append("⚠️  Хуже нормального диапазона — нужно разобраться (рынок изменился или ошибка исполнения).")
         elif total_r > hi:
             lines.append("Лучше нормального диапазона — приятно, но это тоже повод проверить, не везение ли это.")

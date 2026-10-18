@@ -43,7 +43,22 @@ def test_report_without_trades_and_with_bands(tmp_path: Path) -> None:
     }
     (tmp_path / "mc.json").write_text(json.dumps(mc))
     out = build(LiveState(), j, tmp_path / "mc.json", "swing-mom")
-    assert "-1.00 R" in out and "В пределах" in out
+    assert "-1.00 R" in out and "слишком мало" in out  # one stop is no evidence either way
+    j.write_text("".join(json.dumps(_close("10")) + "\n" for _ in range(12)))
+    mc["cum_r_bands"] = {"p5": [-3.0] * 12, "p50": [1.0] * 12, "p95": [9.0] * 12}
+    (tmp_path / "mc.json").write_text(json.dumps(mc))
+    assert "В пределах" in build(LiveState(), j, tmp_path / "mc.json", "swing-mom")
+
+
+def test_pnl_update_fills_missing_close(tmp_path: Path) -> None:
+    j = tmp_path / "trades.jsonl"
+    rows = [
+        {**_close("10"), "signal_id": "s1", "pnl": None, "exit": None},
+        {"type": "pnl_update", "signal_id": "s1", "pnl": "-6", "exit": "97"},
+    ]
+    j.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    [t] = closed_trades(j, "swing-mom")
+    assert t["pnl_usdt"] == -6.0 and t["r"] == -0.3
 
 
 def test_block_bootstrap_shapes_and_stats() -> None:
