@@ -1,0 +1,105 @@
+{
+  "candidate": "H-015-SWING-TSMOM[240m;lookback_d=28,hold_d=14,k=3.0,long_only=False]",
+  "family": [
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=7,hold_d=7,k=2.0,long_only=False]",
+      "mean_bps": 24.276746774607545,
+      "n": 166
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=7,hold_d=7,k=3.0,long_only=False]",
+      "mean_bps": 3.8819880897942496,
+      "n": 145
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=7,hold_d=14,k=2.0,long_only=False]",
+      "mean_bps": 126.8417006592465,
+      "n": 92
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=7,hold_d=14,k=3.0,long_only=False]",
+      "mean_bps": 97.31039262857658,
+      "n": 78
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=14,hold_d=7,k=2.0,long_only=False]",
+      "mean_bps": -23.33771846828959,
+      "n": 172
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=14,hold_d=7,k=3.0,long_only=False]",
+      "mean_bps": 45.983668648281125,
+      "n": 140
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=14,hold_d=14,k=2.0,long_only=False]",
+      "mean_bps": 62.335622140116065,
+      "n": 105
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=14,hold_d=14,k=3.0,long_only=False]",
+      "mean_bps": 242.43609236750572,
+      "n": 77
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=28,hold_d=7,k=2.0,long_only=False]",
+      "mean_bps": 60.87766770964908,
+      "n": 166
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=28,hold_d=7,k=3.0,long_only=False]",
+      "mean_bps": 92.43268284800011,
+      "n": 146
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=28,hold_d=14,k=2.0,long_only=False]",
+      "mean_bps": 160.31249130317624,
+      "n": 96
+    },
+    {
+      "key": "H-015-SWING-TSMOM[240m;lookback_d=28,hold_d=14,k=3.0,long_only=False]",
+      "mean_bps": 199.69952229771752,
+      "n": 79
+    }
+  ],
+  "family_mean_bps": 91.08757141653177,
+  "family_positive": 11,
+  "max_dd_per_symbol": 0.014980038659006434,
+  "mean_net_bps": 199.69952229771752,
+  "n": 79,
+  "per_symbol": {
+    "BTCUSDT": {
+      "avg_hold_bars": 65.26829268292683,
+      "daily_sharpe": 0.6560045380449316,
+      "fee_drag_bps": 13.000000000000002,
+      "max_dd": 0.014980038659006434,
+      "mean_net_bps": 65.32677535718499,
+      "mean_r": 0.17461186873064377,
+      "n": 41,
+      "profit_factor": 1.267053631629966,
+      "t_stat": 0.5678068325223302,
+      "total_return": 0.01775617895185011,
+      "trades_per_day": 0.09050772626931568,
+      "win_rate": 0.4878048780487805
+    },
+    "ETHUSDT": {
+      "avg_hold_bars": 70.5,
+      "daily_sharpe": 1.6391842033662918,
+      "fee_drag_bps": 13.000000000000002,
+      "max_dd": 0.0075890482767067,
+      "mean_net_bps": 344.68064399671323,
+      "mean_r": 0.4756680086203938,
+      "n": 38,
+      "profit_factor": 2.1072511127359204,
+      "t_stat": 1.780737421688605,
+      "total_return": 0.04590571557853429,
+      "trades_per_day": 0.08388520971302428,
+      "win_rate": 0.5789473684210527
+    }
+  },
+  "profit_factor": 1.7217413184826469,
+  "status": "VALIDATION",
+  "stressed_mean_bps": 193.3801151302955,
+  "t": 1.799069979204766,
+  "win_rate": 0.5316455696202531
+}
