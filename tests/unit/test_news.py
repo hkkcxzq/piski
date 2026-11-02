@@ -232,6 +232,10 @@ def _h(title: str, source: str = "x") -> Headline:
         ("NEAR Intents halts services after $3.8 million exploit, promises full compensation", "x", Severity.NONE),
         ("Near Intents Hacked for $3.8M Days After Denying North Korea-Linked Bitget Hacker", "x", Severity.NONE),
         ("NEAR Intents suffers $3.8M exploit after assistance with Bitget breach", "x", Severity.NONE),
+        # follow-ups about the 2026-10 Binance hack that kept the pause alive for days
+        ("FBI Blames North Korea for $6B Binance Hack as Exchange Reopens Withdrawals", "x", Severity.NONE),
+        ("TRM and Chainalysis Tie $6.4B Binance Hack to North Korea's TraderTraitor", "x", Severity.NONE),
+        ("Binance hacked, $6B stolen from hot wallets", "x", Severity.HIGH),
         ("Major exchange halts withdrawals amid liquidity concerns", "x", Severity.HIGH),
         ("Bitget halts withdrawals after $1.2 billion hack", "x", Severity.HIGH),
         ("USDC loses its peg after bank failure", "x", Severity.HIGH),
@@ -312,3 +316,38 @@ def test_ollama_available() -> None:
     assert ollama_available("qwen3:8b", http=ok)
     assert not ollama_available("gemma3:4b", http=ok)
     assert not ollama_available("qwen3:8b", http=_ollama(lambda req: httpx.Response(404)))
+
+
+def test_news_pause_is_capped_per_incident() -> None:
+    from quant.news.policy import NEWS_PAUSE_COOLDOWN_MS, NEWS_PAUSE_MAX_MS, Signal  # noqa: PLC0415
+
+    no_events = np.array([], dtype=np.int64)
+    hour = 60 * MINUTE_MS
+
+    def high(t: int) -> Signal:
+        sig = signal_from_assessment(_assess(Severity.HIGH), "follow-up", t)
+        assert sig is not None and sig.level is RiskLevel.PAUSE_NEW
+        return sig
+
+    st = RiskState()
+    levels = {}
+    # a follow-up article every 2 hours for four days
+    for k in range(0, 48):
+        t = NOW + 2 * k * hour
+        st = update_state(st, [high(t)], t, no_events)
+        levels[2 * k] = st.level
+    assert levels[0] is RiskLevel.PAUSE_NEW and levels[24] is RiskLevel.PAUSE_NEW
+    # the pause is over shortly after the 24 h cap (+ the last 3 h signal), and stays over during the cooldown
+    assert levels[30] is RiskLevel.CAUTION and levels[60] is RiskLevel.CAUTION
+    assert all(levels[h] is not RiskLevel.PAUSE_NEW for h in range(30, 96, 2))  # the story is still going
+    assert 24 * hour == NEWS_PAUSE_MAX_MS and 24 * hour == NEWS_PAUSE_COOLDOWN_MS
+    # 26 h after the last article the cooldown is over: a genuinely new incident pauses again; CRITICAL always passes
+    t = NOW + 120 * hour
+    st = update_state(st, [high(t)], t, no_events)
+    assert st.level is RiskLevel.PAUSE_NEW and st.pause_since_ms == t
+    crit = signal_from_assessment(_assess(Severity.CRITICAL), "c", t)
+    assert crit is not None
+    assert update_state(RiskState(pause_cooldown_until_ms=t + hour), [crit], t, no_events).level is RiskLevel.FLATTEN
+    # the cooldown survives a period with no active signals and a save/load round trip
+    quiet = update_state(RiskState(pause_cooldown_until_ms=t + hour), [], t, no_events)
+    assert RiskState.from_dict(quiet.to_dict()).pause_cooldown_until_ms == t + hour

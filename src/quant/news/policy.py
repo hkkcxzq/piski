@@ -47,6 +47,12 @@ MIN_CONFIDENCE = 0.6
 FLATTEN_MIN_CONFIDENCE = 0.75
 FOMC_BEFORE_MS = 12 * 60 * MINUTE_MS
 FOMC_AFTER_MS = 2 * 60 * MINUTE_MS
+CALENDAR_REASON = "FOMC decision window"
+# A news-driven entry pause lasts at most this long; follow-up articles about the same incident
+# (investigations, attributions, "withdrawals reopen") must not keep extending it for days.
+NEWS_PAUSE_MAX_MS = 24 * 60 * MINUTE_MS
+# After a pause hit that cap, new HIGH signals only reduce risk for this long (CRITICAL always passes).
+NEWS_PAUSE_COOLDOWN_MS = 24 * 60 * MINUTE_MS
 
 
 @dataclass(slots=True)
@@ -63,6 +69,8 @@ class RiskState:
     reasons: list[str] = field(default_factory=list)
     signals: list[Signal] = field(default_factory=list)
     updated_ms: int = 0
+    pause_since_ms: int = 0  # start of the current news-driven entry pause (0 = none)
+    pause_cooldown_until_ms: int = 0  # until then new HIGH signals are downgraded to CAUTION
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -79,6 +87,8 @@ class RiskState:
             list(d.get("reasons", [])),
             sigs,
             int(d.get("updated_ms", 0)),
+            int(d.get("pause_since_ms", 0)),
+            int(d.get("pause_cooldown_until_ms", 0)),
         )
 
 
@@ -97,23 +107,50 @@ def calendar_signal(now_ms: int, events_ms: np.ndarray | None = None) -> Signal 
     events = fomc_times_ms() if events_ms is None else events_ms
     for ev in events:
         if ev - FOMC_BEFORE_MS <= now_ms <= ev + FOMC_AFTER_MS:
-            return Signal(RiskLevel.PAUSE_NEW, int(ev + FOMC_AFTER_MS), "FOMC decision window")
+            return Signal(RiskLevel.PAUSE_NEW, int(ev + FOMC_AFTER_MS), CALENDAR_REASON)
     return None
+
+
+def _is_news_pause(s: Signal) -> bool:
+    return s.level is RiskLevel.PAUSE_NEW and s.reason != CALENDAR_REASON
 
 
 def update_state(
     state: RiskState, new_signals: Iterable[Signal], now_ms: int, events_ms: np.ndarray | None = None
 ) -> RiskState:
     active = [s for s in state.signals if s.until_ms > now_ms]
-    active.extend(new_signals)
+    since = state.pause_since_ms if any(_is_news_pause(s) for s in active) else 0
+    cooldown_until = state.pause_cooldown_until_ms
+    for raw in new_signals:
+        sig = raw
+        if _is_news_pause(raw):
+            over_cap = since != 0 and now_ms - since >= NEWS_PAUSE_MAX_MS
+            if over_cap or now_ms < cooldown_until:
+                # a story that keeps producing articles stays downgraded until it has been quiet for 24 h
+                cooldown_until = max(cooldown_until, now_ms + NEWS_PAUSE_COOLDOWN_MS)
+                _, minutes = RULES[Severity.MEDIUM]
+                sig = Signal(
+                    RiskLevel.CAUTION, now_ms + minutes * MINUTE_MS, f"(тема уже вызывала паузу ≥ 24 ч) {raw.reason}"
+                )
+            elif since == 0:
+                since = now_ms
+        active.append(sig)
     cal = calendar_signal(now_ms, events_ms)
     if cal is not None and not any(s.reason == cal.reason and s.until_ms == cal.until_ms for s in active):
         active.append(cal)
     if not active:
-        return RiskState(updated_ms=now_ms)
+        return RiskState(updated_ms=now_ms, pause_cooldown_until_ms=cooldown_until)
     top = max(s.level for s in active)
     winners = [s for s in active if s.level == top]
-    return RiskState(top, max(s.until_ms for s in winners), [s.reason for s in winners], active, now_ms)
+    return RiskState(
+        top,
+        max(s.until_ms for s in winners),
+        [s.reason for s in winners],
+        active,
+        now_ms,
+        since if any(_is_news_pause(s) for s in active) else 0,
+        cooldown_until,
+    )
 
 
 def save_state(path: Path, state: RiskState) -> None:

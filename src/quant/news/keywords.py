@@ -108,7 +108,9 @@ EXCLUDE = re.compile(r"\b(hackathon|ethical hack\w*|bug bount\w*|white ?hat)\b",
 RETROSPECTIVE = re.compile(
     r"\b(q[1-4]|quarter\w*|year\w*|month\w*|weekly|losses|recap|report\w*|so far|this year|"
     r"compensat\w*|refund\w*|reimburs\w*|recover\w*|returns?|days after|weeks after|"
-    r"arrest\w*|charged|indict\w*|sanction\w*|lessons|how|why|what)\b",
+    r"arrest\w*|charged|indict\w*|sanction\w*|lessons|how|why|what|"
+    r"blam\w*|attribut\w*|investigat\w*|reopen\w*|resum\w*|overshadow\w*|aftermath|fallout|ties|tied|tie|"
+    r"linked to|traced|fbi|tracking|trackers?)\b",
     _F,
 )
 CONFIDENCE = {Severity.HIGH: 0.7, Severity.MEDIUM: 0.65}
